@@ -12,15 +12,14 @@ struct L1Set {
     uint8_t data[NUM_L1_WAYS][LINE_SIZE];
 };
 
-
 struct TLBEntry {
-    uint64_t page_num;
-    uint64_t page_frame;
+    uint64_t virtual_page_num;
+    uint64_t physical_page_frame;
     bool valid;
 };
 
-constexpr uint8_t L1_SETS = 8;
-constexpr uint8_t DTLB_ENTRIES = 256;
+constexpr uint8_t L1_SETS = 64;
+constexpr uint16_t DTLB_ENTRIES = 256;
 constexpr uint8_t ITLB_ENTRIES = 128;
 struct Core {
     L1Set l1d[L1_SETS];
