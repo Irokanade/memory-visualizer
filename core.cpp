@@ -1,6 +1,23 @@
 #include "core.h"
 #include "plru.h"
+#include <cstdint>
 #include <cstring>
+
+bool tlb_lookup(
+    TLBEntry *tlb, 
+    uint16_t num_entries, 
+    uint64_t virtual_page_num,
+    uint64_t *physical_frame) 
+{
+    for (uint16_t i = 0; i < num_entries; i++) {
+        if (tlb[i].valid && tlb[i].virtual_page_num == virtual_page_num) {
+            *physical_frame = tlb[i].physical_frame;
+            return true;
+        }
+    }
+
+    return false;
+}
 
 bool l1_cache_read(L1Set *l1Set, uint64_t addr, uint8_t *data) {
     uint8_t offset = addr & 0x3F; // low 6 bits

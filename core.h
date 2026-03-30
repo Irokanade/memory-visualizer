@@ -14,7 +14,7 @@ struct L1Set {
 
 struct TLBEntry {
     uint64_t virtual_page_num;
-    uint64_t physical_page_frame;
+    uint64_t physical_frame;
     bool valid;
 };
 
