@@ -28,4 +28,10 @@ struct Core {
     uint8_t core_id;
 };
 
+bool tlb_lookup(
+    TLBEntry *tlb, 
+    uint16_t num_entries, 
+    uint64_t virtual_page_num,
+    uint64_t *physical_frame);
+
 #endif // CORE_H
