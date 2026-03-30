@@ -12,8 +12,6 @@ struct L1Set {
     uint8_t data[NUM_L1_WAYS][LINE_SIZE];
 };
 
-void l1_plru_update(uint8_t *plru_bits, uint8_t way);
-uint8_t l1_plru_victim(uint8_t plru_bits);
 
 struct TLBEntry {
     uint64_t page_num;

@@ -13,7 +13,4 @@ struct L2Set {
     uint8_t data[NUM_L2_WAYS][LINE_SIZE];
 };
 
-void l2_plru_update(uint16_t *plru_bits, uint8_t way);
-uint8_t l2_plru_evict(uint16_t plru_bits);
-
 #endif // UNCORE_H
