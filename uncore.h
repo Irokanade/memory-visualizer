@@ -13,4 +13,15 @@ struct L2Set {
     uint8_t data[NUM_L2_WAYS][LINE_SIZE];
 };
 
+bool l2_cache_read(L2Set *l2Set, uint8_t core_id, uint64_t addr, uint8_t *data);
+bool l2_cache_write(L2Set *l2Set, uint8_t core_id, uint64_t addr, uint8_t *data);
+void l2_cache_fill(
+    L2Set *l2Set, 
+    uint8_t core_id,
+    uint8_t way, 
+    uint64_t tag,
+    uint8_t *data,
+    MESIState state);
+
+
 #endif // UNCORE_H

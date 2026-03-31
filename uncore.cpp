@@ -37,7 +37,8 @@ bool l2_cache_write(L2Set *l2Set, uint8_t core_id, uint64_t addr, uint8_t *data)
     return false;
 }
 
-void l2_cache_fill(L2Set *l2Set, 
+void l2_cache_fill(
+    L2Set *l2Set, 
     uint8_t core_id,
     uint8_t way, 
     uint64_t tag,

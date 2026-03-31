@@ -44,4 +44,13 @@ void tlb_fill(
     uint64_t virtual_page_num,
     uint64_t physical_frame);
 
+
+bool l1_cache_read(L1Set *l1Set, uint64_t addr, uint8_t *data);
+bool l1_cache_write(L1Set *l1Set, uint64_t addr, uint8_t *data);
+void l1_cache_fill(L1Set *l1Set, 
+    uint8_t way, 
+    uint64_t tag, 
+    uint8_t *data,
+    MESIState state);
+
 #endif // CORE_H
