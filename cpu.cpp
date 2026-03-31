@@ -14,7 +14,9 @@ void translate(Core *core, Memory *mem, uint64_t virtual_address, uint64_t *phys
     }
 
     if (page_walk(mem, virtual_address, physical_address)) {
-        // TODO: fill TLB with new mapping
+        uint64_t frame = (*physical_address) >> 12;
+        tlb_fill(core->l1_dtlb, L1_DTLB_SETS, virtual_page_num, frame);
+        tlb_fill(core->l2_dtlb, L2_DTLB_SETS, virtual_page_num, frame);
         return;
     }
 }

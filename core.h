@@ -16,6 +16,7 @@ constexpr uint8_t NUM_TLB_WAYS = 4;
 struct TLBSet {
     uint64_t virtual_page_num[NUM_TLB_WAYS];
     uint64_t physical_frame[NUM_TLB_WAYS];
+    uint8_t plru_bits;
     bool valid[NUM_TLB_WAYS];
 };
 
@@ -36,5 +37,11 @@ bool tlb_lookup(
     uint16_t num_sets,
     uint64_t virtual_page_num,
     uint64_t *physical_frame);
+
+void tlb_fill(
+    TLBSet *tlb,
+    uint16_t num_sets,
+    uint64_t virtual_page_num,
+    uint64_t physical_frame);
 
 #endif // CORE_H
