@@ -16,7 +16,11 @@ bool page_walk(Memory *mem, uint64_t virtual_address, uint64_t *physical_address
             return true;
         }
 
-        table = (PageTable*)&mem->data[entry->physical_address];
+        if (mem->size < sizeof(PageTable) ||
+            entry->physical_address > mem->size - sizeof(PageTable)) {
+            return false;
+        }
+        table = reinterpret_cast<PageTable*>(&mem->data[entry->physical_address]);
     }
 
     return false;

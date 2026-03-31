@@ -1,20 +1,19 @@
 #include "core.h"
 #include "plru.h"
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 
-bool tlb_lookup(
-    TLBSet *tlb,
-    uint16_t num_sets,
-    uint64_t virtual_page_num,
-    uint64_t *physical_frame)
-{
-    uint16_t index = virtual_page_num % num_sets;
-    TLBSet *set = &tlb[index];
+static_assert(L1_SETS      && (L1_SETS      & (L1_SETS      - 1)) == 0, "L1_SETS must be power of 2");
+static_assert(L1_DTLB_SETS && (L1_DTLB_SETS & (L1_DTLB_SETS - 1)) == 0, "L1_DTLB_SETS must be power of 2");
+static_assert(L2_DTLB_SETS && (L2_DTLB_SETS & (L2_DTLB_SETS - 1)) == 0, "L2_DTLB_SETS must be power of 2");
+static_assert(ITLB_SETS    && (ITLB_SETS    & (ITLB_SETS    - 1)) == 0, "ITLB_SETS must be power of 2");
 
+bool tlb_lookup(TLBSet *set, uint64_t virtual_page_num, uint64_t *physical_frame) {
     for (uint8_t way = 0; way < NUM_TLB_WAYS; way++) {
         if (set->valid[way] && set->virtual_page_num[way] == virtual_page_num) {
             *physical_frame = set->physical_frame[way];
+            plru_update<uint8_t, NUM_TLB_WAYS>(&set->plru_bits, way);
             return true;
         }
     }
@@ -22,14 +21,7 @@ bool tlb_lookup(
     return false;
 }
 
-void tlb_fill(
-    TLBSet *tlb,
-    uint16_t num_sets,
-    uint64_t virtual_page_num,
-    uint64_t physical_frame)
-{
-    uint16_t index = virtual_page_num & (num_sets-1);
-    TLBSet *set = &tlb[index];
+void tlb_fill(TLBSet *set, uint64_t virtual_page_num, uint64_t physical_frame) {
 
     uint8_t way;
     for (way = 0; way < NUM_TLB_WAYS && set->valid[way]; way++);
@@ -44,47 +36,33 @@ void tlb_fill(
     plru_update<uint8_t, NUM_TLB_WAYS>(&set->plru_bits, way);
 }
 
-bool l1_cache_read(L1Set *l1Set, uint64_t addr, uint8_t *data) {
-    uint8_t offset = addr & 0x3F; // low 6 bits
-    uint16_t index = (addr >> 6) & 0x3F; // next 6 bits
-    uint64_t tag = addr >> 12;
-
-    for (uint8_t way = 0; way < NUM_L1_WAYS; way++) {
-        if (l1Set->tag[way] == tag && l1Set->state[way] != MESIState::INVALID) {
-            std::memcpy(data, l1Set->data[way], LINE_SIZE);
-            plru_update<uint8_t, NUM_L1_WAYS>(&l1Set->plru_bits, way);
+bool find_l1_way(const L1Set *set, uint64_t tag, uint8_t *way) {
+    for (uint8_t w = 0; w < NUM_L1_WAYS; w++) {
+        if (set->tag[w] == tag && set->state[w] != MESIState::INVALID) {
+            *way = w;
             return true;
         }
     }
-
     return false;
 }
 
-bool l1_cache_write(L1Set *l1Set, uint64_t addr, uint8_t *data) {
-    uint8_t offset = addr & 0x3F; // low 6 bits
-    uint16_t index = (addr >> 6) & 0x3F; // next 6 bits
-    uint64_t tag = addr >> 12;
-
-    for (uint8_t way = 0; way < NUM_L1_WAYS; way++) {
-        if (l1Set->tag[way] == tag && l1Set->state[way] != MESIState::INVALID) {
-            std::memcpy(l1Set->data[way], data, LINE_SIZE);
-            plru_update<uint8_t, NUM_L1_WAYS>(&l1Set->plru_bits, way);
-            l1Set->state[way] = MESIState::MODIFIED;
-            return true;
-        }
-    }
-
-    return false;
+void l1_cache_read_way(L1Set *l1Set, uint8_t way, uint8_t offset, uint8_t *data, uint8_t data_size) {
+    assert(offset + data_size <= LINE_SIZE && "access crosses cache line boundary");
+    std::memcpy(data, l1Set->data[way] + offset, data_size);
+    plru_update<uint8_t, NUM_L1_WAYS>(&l1Set->plru_bits, way);
 }
 
-void l1_cache_fill(L1Set *l1Set, 
-    uint8_t way, 
-    uint64_t tag, 
-    uint8_t *data,
-    MESIState state) 
-{
+// Only succeeds on M or E (SHARED requires an RFO first — handled by cpu_write).
+void l1_cache_write_way(L1Set *l1Set, uint8_t way, uint8_t offset, uint8_t *data, uint8_t data_size) {
+    assert(offset + data_size <= LINE_SIZE && "access crosses cache line boundary");
+    std::memcpy(l1Set->data[way] + offset, data, data_size);
+    plru_update<uint8_t, NUM_L1_WAYS>(&l1Set->plru_bits, way);
+    l1Set->state[way] = MESIState::MODIFIED; // E→M or M→M
+}
+
+void l1_cache_fill(L1Set *l1Set, uint64_t tag, uint8_t way, uint8_t *line, MESIState state) {
     l1Set->tag[way] = tag;
     l1Set->state[way] = state;
-    std::memcpy(l1Set->data[way], data, LINE_SIZE);
+    std::memcpy(l1Set->data[way], line, LINE_SIZE);
     plru_update<uint8_t, NUM_L1_WAYS>(&l1Set->plru_bits, way);
 }

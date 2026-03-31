@@ -1,0 +1,8 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+
+BraceWrapping:
+  AfterIf: true
+  AfterFor: false
+  AfterWhile: false
+  AfterDo: false
