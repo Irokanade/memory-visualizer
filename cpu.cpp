@@ -8,7 +8,7 @@ void translate(Core *core, Memory *mem, uint64_t virtual_address, uint64_t *phys
     uint64_t virtual_page_num = virtual_address >> 12;
     uint64_t physical_frame;
 
-    if (tlb_lookup(core->dtlb, DTLB_ENTRIES, virtual_page_num, &physical_frame)) {
+    if (tlb_lookup(core->l1_dtlb, L1_DTLB_SETS, virtual_page_num, &physical_frame)) {
         *physical_address = (physical_frame << 12) | (virtual_address & 0xFFF);
         return;
     }

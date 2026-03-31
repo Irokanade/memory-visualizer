@@ -4,14 +4,17 @@
 #include <cstring>
 
 bool tlb_lookup(
-    TLBEntry *tlb, 
-    uint16_t num_entries, 
+    TLBSet *tlb,
+    uint16_t num_sets,
     uint64_t virtual_page_num,
-    uint64_t *physical_frame) 
+    uint64_t *physical_frame)
 {
-    for (uint16_t i = 0; i < num_entries; i++) {
-        if (tlb[i].valid && tlb[i].virtual_page_num == virtual_page_num) {
-            *physical_frame = tlb[i].physical_frame;
+    uint16_t index = virtual_page_num % num_sets;
+    TLBSet *set = &tlb[index];
+
+    for (uint8_t way = 0; way < NUM_TLB_WAYS; way++) {
+        if (set->valid[way] && set->virtual_page_num[way] == virtual_page_num) {
+            *physical_frame = set->physical_frame[way];
             return true;
         }
     }
