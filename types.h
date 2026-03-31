@@ -12,4 +12,12 @@ enum MESIState : uint8_t {
     INVALID   = 3
 };
 
+constexpr uint64_t to_frame(uint64_t addr) {
+    return addr >> 12;
+}
+
+constexpr uint64_t to_address(uint64_t frame, uint64_t offset) {
+    return (frame << 12) | offset;
+}
+
 #endif // TYPES_H
