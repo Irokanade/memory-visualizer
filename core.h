@@ -4,6 +4,22 @@
 #include "types.h"
 #include <cstdint>
 
+
+enum class StreamDirection : uint8_t { UNKNOWN, FORWARD, BACKWARD };
+enum class StreamConfidence : uint8_t { INVALID, TRAINING, STEADY };
+
+struct Stream {
+    uint64_t last_line;
+    StreamDirection direction;
+    StreamConfidence confidence;
+};
+
+constexpr uint8_t NUM_STREAMS = 8;
+struct Prefetcher {
+    Stream streams[NUM_STREAMS];
+    uint8_t lru_age[NUM_STREAMS];
+};
+
 constexpr uint8_t NUM_L1_WAYS = 8;
 struct L1Set {
     uint64_t tag[NUM_L1_WAYS];
@@ -37,6 +53,7 @@ struct Core {
     TLBSet l2_dtlb[L2_DTLB_SETS];
     TLBSet itlb[ITLB_SETS];
     uint8_t core_id;
+    Prefetcher prefetcher;
 };
 
 bool tlb_lookup(TLBSet *set, uint64_t virtual_page_num, uint64_t *physical_frame);
@@ -44,12 +61,11 @@ void tlb_fill(TLBSet *set, uint64_t virtual_page_num, uint64_t physical_frame);
 
 // Sets *way to the matching non-INVALID way index. Returns false on miss.
 bool find_l1_way(const L1Set *set, uint64_t tag, uint8_t *way);
-
-// Read/write using an already-known way and offset (addr & 0x3F).
 void l1_cache_read_way(L1Set *l1Set, uint8_t way, uint8_t offset, uint8_t *data, uint8_t data_size);
 void l1_cache_write_way(L1Set *l1Set, uint8_t way, uint8_t offset, uint8_t *data, uint8_t data_size);
-
-// Install a full cache line into a specific way.
 void l1_cache_fill(L1Set *l1Set, uint64_t tag, uint8_t way, uint8_t *line, MESIState state);
+
+void pf_lru_update(uint8_t *pf_lru_age, uint8_t index);
+uint8_t pf_lru_evict(uint8_t *pf_lru_age);
 
 #endif // CORE_H

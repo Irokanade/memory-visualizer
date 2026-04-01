@@ -66,3 +66,24 @@ void l1_cache_fill(L1Set *l1Set, uint64_t tag, uint8_t way, uint8_t *line, MESIS
     std::memcpy(l1Set->data[way], line, LINE_SIZE);
     plru_update<uint8_t, NUM_L1_WAYS>(&l1Set->plru_bits, way);
 }
+
+void pf_lru_update(uint8_t *pf_lru_age, uint8_t index) {
+    for (uint8_t i = 0; i < NUM_STREAMS; i++) {
+        if (pf_lru_age[i] < pf_lru_age[index]) {
+            pf_lru_age[i]++;
+        }
+    }
+
+    pf_lru_age[index] = 0;
+}
+
+uint8_t pf_lru_evict(uint8_t *pf_lru_age) {
+    uint8_t victim = 0;
+    for (uint8_t i = 1; i < NUM_STREAMS; i++) {
+        if (pf_lru_age[i] > pf_lru_age[victim]) {
+            victim = i;
+        }
+    }
+
+    return victim;
+}
