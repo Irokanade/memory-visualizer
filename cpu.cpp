@@ -231,14 +231,15 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *me
 }
 
 bool cpu_read(
-    Core *cores,
+    CPU *cpu,
     uint8_t core_id,
-    L2Set *l2Sets,
     Memory *mem,
     uint64_t virtual_address,
     uint8_t *data,
     uint8_t data_size)
 {
+    Core *cores = cpu->cores;
+    L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
     uint64_t physical_address;
     if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(core->l1_dtlb, core->l2_dtlb, mem, virtual_address, &physical_address)) {
@@ -307,14 +308,15 @@ bool cpu_read(
 }
 
 bool cpu_write(
-    Core *cores,
+    CPU *cpu,
     uint8_t core_id,
-    L2Set *l2Sets,
     Memory *mem,
     uint64_t virtual_address,
     uint8_t *data,
     uint8_t data_size)
 {
+    Core *cores = cpu->cores;
+    L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
     uint64_t physical_address;
     if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(core->l1_dtlb, core->l2_dtlb, mem, virtual_address, &physical_address)) {
@@ -401,14 +403,15 @@ bool cpu_write(
 }
 
 bool cpu_fetch(
-    Core *cores,
+    CPU *cpu,
     uint8_t core_id,
-    L2Set *l2Sets,
     Memory *mem,
     uint64_t virtual_address,
     uint8_t *data,
     uint8_t data_size)
 {
+    Core *cores = cpu->cores;
+    L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
     uint64_t physical_address;
     if (!translate<ITLB_SETS>(core->itlb, mem, virtual_address, &physical_address)) {

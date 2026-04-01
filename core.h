@@ -5,7 +5,7 @@
 #include <cstdint>
 
 
-enum class StreamDirection : uint8_t { UNKNOWN, FORWARD, BACKWARD };
+enum class StreamDirection : int8_t { UNKNOWN = 0, FORWARD = 1, BACKWARD = -1 };
 enum class StreamConfidence : uint8_t { INVALID, TRAINING, STEADY };
 
 struct Stream {

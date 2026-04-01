@@ -2,7 +2,6 @@
 #define UNCORE_H
 
 #include "types.h"
-#include "plru.h"
 #include <cstdint>
 #include <cstring>
 
