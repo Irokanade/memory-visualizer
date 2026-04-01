@@ -10,6 +10,7 @@ enum class StreamConfidence : uint8_t { INVALID, TRAINING, STEADY };
 
 struct Stream {
     uint64_t last_line;
+    uint64_t prefetch_head;
     StreamDirection direction;
     StreamConfidence confidence;
 };
