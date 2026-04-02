@@ -31,7 +31,7 @@ static void snoop_downgrade_peers(
     l2Set->state[l2_hit_way] = MESIState::SHARED;
 
     while (sharers) {
-        uint8_t c = std::countr_zero(sharers);
+        uint8_t c = static_cast<uint8_t>(std::countr_zero(sharers));
         sharers &= sharers - 1;
 
         L1Set *peer = &cores[c].l1d[l1_index];
@@ -204,7 +204,7 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *me
     uint64_t victim_l1_tag = l1_to_tag(l2_victim_addr);
 
     while (all_valid) {
-        uint8_t c = std::countr_zero(all_valid);
+        uint8_t c = static_cast<uint8_t>(std::countr_zero(all_valid));
         all_valid &= all_valid - 1;
 
         if (valid_d & (1 << c)) {
