@@ -16,9 +16,10 @@ struct Stream {
 };
 
 constexpr uint8_t NUM_STREAMS = 8;
+constexpr uint8_t PREFETCH_DISTANCE = 8;
 struct Prefetcher {
-    Stream streams[NUM_STREAMS];
-    uint8_t lru_age[NUM_STREAMS];
+    Stream streams[NUM_STREAMS] = {};
+    uint8_t lru_age[NUM_STREAMS] = {7, 6, 5, 4, 3, 2, 1, 0};
 };
 
 constexpr uint8_t NUM_L1_WAYS = 8;

@@ -6,7 +6,6 @@
 #include "plru.h"
 
 #include <bit>
-#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -147,11 +146,15 @@ static bool translate(TLBSet *tlb_l1_array, TLBSet *tlb_l2_array, Memory *mem, u
 
 template<bool IS_INSTR>
 static uint8_t evict_l1(L1Set *l1Set, uint16_t l1_index, L2Set *l2Sets, uint8_t core_id) {
-    uint8_t victim = plru_victim<uint8_t, NUM_L1_WAYS>(l1Set->plru_bits);
-
-    if (l1Set->state[victim] == MESIState::INVALID) {
-        return victim;
+    // Prefer any INVALID way — real hardware knows back-invalidated slots are free and
+    // uses them before evicting a valid line. Scanning all ways matches that behavior.
+    for (uint8_t w = 0; w < NUM_L1_WAYS; w++) {
+        if (l1Set->state[w] == MESIState::INVALID) {
+            return w;
+        }
     }
+
+    uint8_t victim = plru_victim<uint8_t, NUM_L1_WAYS>(l1Set->plru_bits);
 
     uint64_t victim_addr = l1_to_addr(l1Set->tag[victim], l1_index);
     L2Set *l2Set = &l2Sets[l2_to_index(victim_addr)];
@@ -218,7 +221,9 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *me
     }
 
     if (l2Set->state[l2_victim] == MESIState::MODIFIED) {
-        assert(l2_victim_addr + LINE_SIZE <= mem->size && "evict_l2: write back out of bounds");
+        if (l2_victim_addr + LINE_SIZE > mem->size) {
+            std::abort();
+        }
         std::memcpy(&mem->data[l2_victim_addr], l2Set->data[l2_victim], LINE_SIZE);
     }
 
@@ -228,6 +233,122 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *me
     l2Set->state[l2_victim] = MESIState::INVALID;
 
     return l2_victim;
+}
+
+// Issue a silent prefetch into L2 only — no L1 fill, no owner tracking.
+// Returns true if the line was (or already was) in L2, false if blocked by page boundary
+// or bounds — caller should stop the burst and demote the stream to TRAINING.
+static bool pf_fill_l2(Core *cores, L2Set *l2Sets, Memory *mem, uint64_t from_line, uint64_t next_line) {
+    // Never cross a 4KB page boundary (hardware constraint, per Drepper §6.3)
+    if ((next_line & ~static_cast<uint64_t>(0xFFF)) != (from_line & ~static_cast<uint64_t>(0xFFF))) {
+        return false;
+    }
+    // Guard against backward-wrap near address 0 and forward out-of-bounds.
+    if (next_line < LINE_SIZE || next_line + LINE_SIZE > mem->size) {
+        return false;
+    }
+    uint16_t l2_index = l2_to_index(next_line);
+    L2Set *l2Set = &l2Sets[l2_index];
+    uint64_t l2_tag = l2_to_tag(next_line);
+    uint8_t way;
+    if (l2_find_way(l2Set, l2_tag, &way)) {
+        return true; // already present
+    }
+    uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
+    constexpr uint8_t NO_CORE = 0; // dummy — core_valid_d zeroed immediately after
+    l2_cache_fill(l2Set, NO_CORE, l2_tag, l2_victim, &mem->data[next_line],
+                  MESIState::EXCLUSIVE,
+                  &l2Set->core_valid_d[l2_victim], &l2Set->core_valid_i[l2_victim]);
+    l2Set->core_valid_d[l2_victim] = 0; // prefetch has no L1 owner
+    return true;
+}
+
+// Next-line instruction prefetcher — unconditionally prefetches the line after an L1I miss.
+// No stream detection: instruction fetch is almost always sequential.
+static void pf_nextline_on_miss(Core *cores, L2Set *l2Sets, Memory *mem, uint64_t miss_line) {
+    pf_fill_l2(cores, l2Sets, mem, miss_line, miss_line + LINE_SIZE);
+}
+
+// Stream detector — called on every L2 data demand miss. Trains the stream table and
+// burst-prefetches into L2 for confirmed streams. Never crosses 4KB page boundaries.
+static void pf_stream_on_miss(Prefetcher *pf, Core *cores, L2Set *l2Sets, Memory *mem, uint64_t miss_line) {
+    for (uint8_t i = 0; i < NUM_STREAMS; i++) {
+        Stream *stream = &pf->streams[i];
+
+        if (stream->confidence == StreamConfidence::INVALID) {
+            continue;
+        }
+
+        if (stream->confidence == StreamConfidence::TRAINING) {
+            if (miss_line == stream->last_line + LINE_SIZE) {
+                stream->direction  = StreamDirection::FORWARD;
+                stream->confidence = StreamConfidence::STEADY;
+                stream->prefetch_head = miss_line;
+            } else if (miss_line == stream->last_line - LINE_SIZE) {
+                stream->direction  = StreamDirection::BACKWARD;
+                stream->confidence = StreamConfidence::STEADY;
+                stream->prefetch_head = miss_line;
+            } else {
+                // No match — leave entry untouched and let LRU age it out.
+                // Hardware behavior: content-addressed lookup finds at most one match;
+                // mismatching entries are never restarted in-place.
+                continue;
+            }
+        } else {
+            // STEADY match: miss must be within [last_line+stride .. prefetch_head+stride].
+            // Demand hits inside the prefetch window are L2 hits and don't call pf_stream_on_miss,
+            // so the next miss arrives at prefetch_head+stride, not last_line+stride.
+            // Signed gap handles both FORWARD (+1) and BACKWARD (-1) without branching.
+            int8_t  dir              = static_cast<int8_t>(stream->direction);
+            int64_t dist_from_last   = (static_cast<int64_t>(miss_line)
+                                        - static_cast<int64_t>(stream->last_line))
+                                       * static_cast<int64_t>(dir);
+            int64_t dist_from_head   = (static_cast<int64_t>(miss_line)
+                                        - static_cast<int64_t>(stream->prefetch_head))
+                                       * static_cast<int64_t>(dir);
+            if (dist_from_last < static_cast<int64_t>(LINE_SIZE) ||
+                dist_from_head  > static_cast<int64_t>(LINE_SIZE)) {
+                continue;
+            }
+        }
+
+        // Matched — advance demand pointer, then burst-prefetch until prefetch_head
+        // is PREFETCH_DISTANCE lines ahead of last_line (building lookahead distance).
+        // If a prefetch is blocked (page boundary or bounds), demote to TRAINING so the
+        // slot can be reclaimed rather than sitting stuck at the boundary forever.
+        // stride read after direction is set — valid for both TRAINING→STEADY and STEADY paths.
+        int8_t stride = static_cast<int8_t>(stream->direction);
+        stream->last_line = miss_line;
+        for (uint8_t issued = 0; issued < PREFETCH_DISTANCE; issued++) {
+            // Signed gap: positive when prefetch_head is ahead in the stream direction.
+            int64_t gap = (static_cast<int64_t>(stream->prefetch_head)
+                           - static_cast<int64_t>(miss_line))
+                          * static_cast<int64_t>(stride);
+            if (gap >= static_cast<int64_t>(PREFETCH_DISTANCE) * LINE_SIZE) break;
+            uint64_t next = stream->prefetch_head
+                            + static_cast<uint64_t>(static_cast<int64_t>(stride) * LINE_SIZE);
+            if (!pf_fill_l2(cores, l2Sets, mem, stream->prefetch_head, next)) {
+                // Blocked by page boundary or bounds — fully reset to TRAINING.
+                // Hardware resets the entry on demotion; direction is re-derived from the
+                // next two consecutive misses, so leaving it stale would be functionally
+                // equivalent but not accurate to hardware state.
+                stream->confidence = StreamConfidence::TRAINING;
+                stream->direction  = StreamDirection::UNKNOWN;
+                break;
+            }
+            stream->prefetch_head = next;
+        }
+        pf_lru_update(pf->lru_age, i);
+        return;
+    }
+
+    // No stream matched — allocate a new TRAINING entry for this miss address
+    uint8_t victim = pf_lru_evict(pf->lru_age);
+    pf->streams[victim].last_line = miss_line;
+    pf->streams[victim].prefetch_head = miss_line;
+    pf->streams[victim].direction = StreamDirection::UNKNOWN;
+    pf->streams[victim].confidence = StreamConfidence::TRAINING;
+    pf_lru_update(pf->lru_age, victim);
 }
 
 bool cpu_read(
@@ -294,7 +415,7 @@ bool cpu_read(
 
     // L2 miss — fetch full line from main memory
     uint64_t line_base = to_line_base(physical_address);
-    assert(line_base + LINE_SIZE <= mem->size && "cpu_read: mem fetch out of bounds");
+    if (line_base + LINE_SIZE > mem->size) std::abort(); // cpu_read: mem fetch out of bounds
     uint8_t *mem_line = &mem->data[line_base];
 
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
@@ -302,6 +423,10 @@ bool cpu_read(
 
     l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, mem_line, MESIState::EXCLUSIVE, &l2Set->core_valid_d[l2_victim], &l2Set->core_valid_i[l2_victim]);
     l1_cache_fill(l1Set, l1_tag, l1_victim, mem_line, MESIState::EXCLUSIVE);
+
+    // Hook fires after the demand fill so pf_fill_l2 never aliases the same L2 set
+    // as the demand line and evicts it before it's installed.
+    pf_stream_on_miss(&core->prefetcher, cores, l2Sets, mem, line_base);
 
     std::memcpy(data, mem_line + offset, data_size);
     return true;
@@ -335,7 +460,9 @@ bool cpu_write(
     uint8_t l1_hit_way;
     if (find_l1_way(l1Set, l1_tag, &l1_hit_way)) {
         uint8_t l2_way;
-        assert(l2_find_way(l2Set, l2_tag, &l2_way) && "inclusive invariant violated: L1 line has no backing L2 entry");
+        if (!l2_find_way(l2Set, l2_tag, &l2_way)) {
+            std::abort();
+        }
 
         if (l1Set->state[l1_hit_way] == MESIState::SHARED) {
             // RFO (upgrade S→M): invalidate all other L1 copies via L2 directory
@@ -390,7 +517,9 @@ bool cpu_write(
 
     // L2 miss — fetch from main memory, write-allocate into L2 then L1
     uint64_t line_base = to_line_base(physical_address);
-    assert(line_base + LINE_SIZE <= mem->size && "cpu_write: mem fetch out of bounds");
+    if (line_base + LINE_SIZE > mem->size) {
+        std::abort();
+    }
     std::memcpy(line, &mem->data[line_base], LINE_SIZE);
     std::memcpy(line + offset, data, data_size); // apply write
 
@@ -399,6 +528,9 @@ bool cpu_write(
 
     l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, line, MESIState::MODIFIED, &l2Set->core_valid_d[l2_victim], &l2Set->core_valid_i[l2_victim]);
     l1_cache_fill(l1Set, l1_tag, l1_victim, line, MESIState::MODIFIED);
+
+    // Write-allocate fetches a full line from memory — feed the streamer the same as a load miss.
+    pf_stream_on_miss(&core->prefetcher, cores, l2Sets, mem, line_base);
     return true;
 }
 
@@ -466,7 +598,7 @@ bool cpu_fetch(
 
     // L2 miss — fetch from main memory
     uint64_t line_base = to_line_base(physical_address);
-    assert(line_base + LINE_SIZE <= mem->size && "cpu_fetch: mem fetch out of bounds");
+    if (line_base + LINE_SIZE > mem->size) std::abort(); // cpu_fetch: mem fetch out of bounds
     uint8_t *mem_line = &mem->data[line_base];
 
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
@@ -475,6 +607,8 @@ bool cpu_fetch(
     // Fresh from memory — no other sharers exist, so L2 starts EXCLUSIVE.
     l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, mem_line, MESIState::EXCLUSIVE, &l2Set->core_valid_i[l2_victim], &l2Set->core_valid_d[l2_victim]);
     l1_cache_fill(l1Set, l1_tag, l1_victim, mem_line, MESIState::SHARED);
+
+    pf_nextline_on_miss(cores, l2Sets, mem, line_base);
 
     std::memcpy(data, mem_line + offset, data_size);
     return true;

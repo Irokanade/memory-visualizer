@@ -68,12 +68,12 @@ void l1_cache_fill(L1Set *l1Set, uint64_t tag, uint8_t way, uint8_t *line, MESIS
 }
 
 void pf_lru_update(uint8_t *pf_lru_age, uint8_t index) {
+    uint8_t old_age = pf_lru_age[index];
     for (uint8_t i = 0; i < NUM_STREAMS; i++) {
-        if (pf_lru_age[i] < pf_lru_age[index]) {
+        if (i != index && pf_lru_age[i] < old_age) {
             pf_lru_age[i]++;
         }
     }
-
     pf_lru_age[index] = 0;
 }
 
