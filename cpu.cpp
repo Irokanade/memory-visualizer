@@ -170,10 +170,17 @@ static uint8_t evict_l1(L1Set *l1Set, uint16_t l1_index, L2Set *l2Sets, uint8_t 
             l2_cache_write_way(l2Set, core_id, l2_way, l1Set->data[victim]);
         } else {
             l2_clear_core_valid_way(&l2Set->core_valid_d[l2_way], core_id);
+            if (l2Set->core_valid_d[l2_way] == 0 && l2Set->core_valid_i[l2_way] == 0 &&
+                l2Set->state[l2_way] == MESIState::SHARED) {
+                l2Set->state[l2_way] = MESIState::EXCLUSIVE;
+            }
         }
     } else {
-        // L1I is always clean (SI protocol) — just clear the tracking bit
         l2_clear_core_valid_way(&l2Set->core_valid_i[l2_way], core_id);
+        if (l2Set->core_valid_d[l2_way] == 0 && l2Set->core_valid_i[l2_way] == 0 &&
+            l2Set->state[l2_way] == MESIState::SHARED) {
+            l2Set->state[l2_way] = MESIState::EXCLUSIVE;
+        }
     }
 
     l1Set->state[victim] = MESIState::INVALID;
