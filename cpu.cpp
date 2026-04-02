@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 
 // BusRead snoop: downgrade each sharer's L1 copy M/E → S.
 // If a peer holds MODIFIED, its data is captured into line_inout and written back to L2.
@@ -369,6 +370,7 @@ bool cpu_read(
     uint8_t *data,
     uint8_t data_size)
 {
+    std::lock_guard<std::mutex> lk(cpu->bus_lock);
     Core *cores = cpu->cores;
     L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
@@ -453,6 +455,7 @@ bool cpu_write(
     uint8_t *data,
     uint8_t data_size)
 {
+    std::lock_guard<std::mutex> lk(cpu->bus_lock);
     Core *cores = cpu->cores;
     L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
@@ -559,6 +562,7 @@ bool cpu_fetch(
     uint8_t *data,
     uint8_t data_size)
 {
+    std::lock_guard<std::mutex> lk(cpu->bus_lock);
     Core *cores = cpu->cores;
     L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
