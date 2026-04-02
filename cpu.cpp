@@ -590,13 +590,12 @@ bool cpu_fetch(
         // L1I lines are always SHARED or INVALID — evict_l1<true> handles clean eviction
         uint8_t victim = evict_l1<true>(l1Set, l1_index, l2Sets, core_id);
         l2_cache_read_way(l2Set, core_id, l2_hit_way, line, &l2Set->core_valid_i[l2_hit_way]);
-        // If other D/I sharers exist, downgrade L2→SHARED and force peer L1D E→S.
-        // If this core is the sole holder, L2 stays EXCLUSIVE — matches hardware: L2 only
-        // transitions to SHARED when a second cache fills from it.
         uint8_t d_sharers = l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
         uint8_t i_sharers = l2Set->core_valid_i[l2_hit_way] & ~(1 << core_id);
         if (d_sharers | i_sharers) {
             snoop_downgrade_peers(cores, d_sharers, l1_index, l1_tag, line, l2Set, l2_hit_way);
+        } else {
+            l2Set->state[l2_hit_way] = MESIState::SHARED;
         }
 
         // L1I always fills as SHARED (SI protocol — instruction pages are read-only)
