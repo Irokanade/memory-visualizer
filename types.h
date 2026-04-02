@@ -8,10 +8,10 @@ constexpr uint8_t LINE_OFFSET_MASK = LINE_SIZE - 1; // 0x3F
 constexpr uint8_t NUM_CORES = 2; // Intel Core 2 Duo
 
 enum MESIState : uint8_t {
-    MODIFIED  = 0,
-    EXCLUSIVE = 1,
-    SHARED    = 2,
-    INVALID   = 3
+    INVALID = 0,
+    MODIFIED = 1,
+    EXCLUSIVE = 2,
+    SHARED = 3
 };
 
 constexpr uint64_t to_frame(uint64_t address) {

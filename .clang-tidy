@@ -1,4 +1,2 @@
 Checks: '-*,cppcoreguidelines-pro-type-cstyle-cast'
 WarningsAsErrors: ''
-BasedOnStyle: LLVM
-IndentWidth: 4

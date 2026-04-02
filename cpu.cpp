@@ -181,11 +181,13 @@ static uint8_t evict_l1(L1Set *l1Set, uint16_t l1_index, L2Set *l2Sets, uint8_t 
 }
 
 static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *mem) {
-    uint8_t l2_victim = plru_victim<uint16_t, NUM_L2_WAYS>(l2Set->plru_bits);
-
-    if (l2Set->state[l2_victim] == MESIState::INVALID) {
-        return l2_victim;
+    for (uint8_t w = 0; w < NUM_L2_WAYS; w++) {
+        if (l2Set->state[w] == MESIState::INVALID) {
+            return w;
+        }
     }
+
+    uint8_t l2_victim = plru_victim<uint16_t, NUM_L2_WAYS>(l2Set->plru_bits);
 
     uint64_t l2_victim_addr = l2_to_addr(l2Set->tag[l2_victim], l2_index);
     uint8_t valid_d = l2Set->core_valid_d[l2_victim];
@@ -465,12 +467,12 @@ bool cpu_write(
         }
 
         if (l1Set->state[l1_hit_way] == MESIState::SHARED) {
-            // RFO (upgrade S→M): invalidate all other L1 copies via L2 directory
+            // RFO (upgrade S→M): invalidate all other L1 copies via L2 directory.
+            // BusRdX is handled by L2, so update L2 PLRU (E→M silent upgrade does not).
             uint8_t other_sharers = l2Set->core_valid_d[l2_way] & ~(1 << core_id);
-
-            // Upgrade RFO: no data capture needed (line already in our L1)
             snoop_invalidate_peers(cores, other_sharers, l1_index, l1_tag,
                                    nullptr, l2Set, l2_way);
+            plru_update<uint16_t, NUM_L2_WAYS>(&l2Set->plru_bits, l2_way);
         }
 
         // All write paths: update L2 state and back-invalidate any peer L1I copies (SMC).
@@ -579,15 +581,13 @@ bool cpu_fetch(
         if (l2Set->state[l2_hit_way] == MESIState::MODIFIED) {
             std::abort();
         }
-        // Filling L1I adds an I-sharer, so L2 must be SHARED regardless of prior state.
-        // Also downgrade any peer L1D EXCLUSIVE copies — they must not silent-upgrade to M.
+        // If other D/I sharers exist, downgrade L2→SHARED and force peer L1D E→S.
+        // If this core is the sole holder, L2 stays EXCLUSIVE — matches hardware: L2 only
+        // transitions to SHARED when a second cache fills from it.
         uint8_t d_sharers = l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
         uint8_t i_sharers = l2Set->core_valid_i[l2_hit_way] & ~(1 << core_id);
         if (d_sharers | i_sharers) {
             snoop_downgrade_peers(cores, d_sharers, l1_index, l1_tag, line, l2Set, l2_hit_way);
-        } else {
-            // No other sharers — snoop_downgrade_peers skipped, so set SHARED explicitly.
-            l2Set->state[l2_hit_way] = MESIState::SHARED;
         }
 
         // L1I always fills as SHARED (SI protocol — instruction pages are read-only)
