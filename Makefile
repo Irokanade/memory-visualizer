@@ -1,7 +1,7 @@
 CXX      := g++
 CXXFLAGS := -std=c++20 -O3 -Wall -Wextra
 
-SRCS := main.cpp core.cpp uncore.cpp cpu.cpp memory.cpp
+SRCS := main.cpp core.cpp uncore.cpp cpu.cpp memory.cpp os.cpp
 OBJS := $(SRCS:.cpp=.o)
 TARGET := main
 

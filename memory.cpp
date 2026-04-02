@@ -1,7 +1,7 @@
 #include "memory.h"
 
-bool page_walk(Memory *mem, uint64_t virtual_address, uint64_t *physical_address) {
-    PageTable *table = &mem->pml4;
+bool page_walk(PageTable *pml4, Memory *mem, uint64_t virtual_address, uint64_t *physical_address) {
+    PageTable *table = pml4;
 
     for (int level = 3; level >= 0; level--) {
         uint16_t index = (virtual_address >> (12 + level * 9)) & 0x1FF;

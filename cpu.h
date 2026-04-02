@@ -9,7 +9,7 @@
 #include "memory.h"
 
 struct CPU {
-    Core  cores[NUM_CORES];
+    Core cores[NUM_CORES];
     L2Set l2Sets[L2_SETS];
     std::mutex bus_lock; // serialises all bus transactions — models the shared Core 2 FSB
 };

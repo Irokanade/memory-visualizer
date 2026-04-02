@@ -2,6 +2,7 @@
 #define CORE_H
 
 #include "types.h"
+#include "memory.h"
 #include <cstdint>
 
 
@@ -55,14 +56,15 @@ constexpr uint8_t L1_DTLB_SETS = 4;
 constexpr uint8_t L2_DTLB_SETS = 64;
 constexpr uint8_t ITLB_SETS    = 32;
 struct Core {
-    L1Set  l1d[L1_SETS];
-    L1Set  l1i[L1_SETS];   // SI protocol in hardware; filled via cpu_fetch, back-invalidated by evict_l2_victim
-    TLBSet l1_dtlb[L1_DTLB_SETS];
-    TLBSet l2_dtlb[L2_DTLB_SETS];
-    TLBSet itlb[ITLB_SETS];
-    uint8_t core_id;
-    Prefetcher prefetcher;
+    L1Set        l1d[L1_SETS];
+    L1Set        l1i[L1_SETS];
+    TLBSet       l1_dtlb[L1_DTLB_SETS];
+    TLBSet       l2_dtlb[L2_DTLB_SETS];
+    TLBSet       itlb[ITLB_SETS];
+    PageTable   *active_pml4;
+    Prefetcher   prefetcher;
     PerfCounters pmc;
+    uint8_t      core_id;
 };
 
 bool tlb_lookup(TLBSet *set, uint64_t virtual_page_num, uint64_t *physical_frame);

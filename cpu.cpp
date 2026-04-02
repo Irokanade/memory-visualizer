@@ -99,7 +99,7 @@ static void snoop_invalidate_peers(
 }
 
 template<uint8_t TLB_L1_SETS>
-static bool translate(TLBSet *tlb_l1_array, Memory *mem, uint64_t virtual_address, uint64_t *physical_address) {
+static bool translate(TLBSet *tlb_l1_array, PageTable *pml4, Memory *mem, uint64_t virtual_address, uint64_t *physical_address) {
     uint64_t virtual_page_num = to_frame(virtual_address);
     TLBSet *tlb_l1 = &tlb_l1_array[virtual_page_num & (TLB_L1_SETS - 1)];
     uint64_t physical_frame;
@@ -109,7 +109,7 @@ static bool translate(TLBSet *tlb_l1_array, Memory *mem, uint64_t virtual_addres
         return true;
     }
 
-    if (page_walk(mem, virtual_address, physical_address)) {
+    if (page_walk(pml4, mem, virtual_address, physical_address)) {
         tlb_fill(tlb_l1, virtual_page_num, to_frame(*physical_address));
         return true;
     }
@@ -118,7 +118,7 @@ static bool translate(TLBSet *tlb_l1_array, Memory *mem, uint64_t virtual_addres
 }
 
 template<uint8_t TLB_L1_SETS, uint8_t TLB_L2_SETS>
-static bool translate(TLBSet *tlb_l1_array, TLBSet *tlb_l2_array, Memory *mem, uint64_t virtual_address, uint64_t *physical_address) {
+static bool translate(TLBSet *tlb_l1_array, TLBSet *tlb_l2_array, PageTable *pml4, Memory *mem, uint64_t virtual_address, uint64_t *physical_address) {
     uint64_t virtual_page_num = to_frame(virtual_address);
     TLBSet *tlb_l1 = &tlb_l1_array[virtual_page_num & (TLB_L1_SETS - 1)];
     TLBSet *tlb_l2 = &tlb_l2_array[virtual_page_num & (TLB_L2_SETS - 1)];
@@ -135,7 +135,7 @@ static bool translate(TLBSet *tlb_l1_array, TLBSet *tlb_l2_array, Memory *mem, u
         return true;
     }
 
-    if (page_walk(mem, virtual_address, physical_address)) {
+    if (page_walk(pml4, mem, virtual_address, physical_address)) {
         uint64_t frame = to_frame(*physical_address);
         tlb_fill(tlb_l1, virtual_page_num, frame);
         tlb_fill(tlb_l2, virtual_page_num, frame);
@@ -375,7 +375,7 @@ bool cpu_read(
     L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
     uint64_t physical_address;
-    if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(core->l1_dtlb, core->l2_dtlb, mem, virtual_address, &physical_address)) {
+    if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(core->l1_dtlb, core->l2_dtlb, core->active_pml4, mem, virtual_address, &physical_address)) {
         return false;
     }
 
@@ -460,7 +460,7 @@ bool cpu_write(
     L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
     uint64_t physical_address;
-    if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(core->l1_dtlb, core->l2_dtlb, mem, virtual_address, &physical_address)) {
+    if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(core->l1_dtlb, core->l2_dtlb, core->active_pml4, mem, virtual_address, &physical_address)) {
         return false;
     }
 
@@ -567,7 +567,7 @@ bool cpu_fetch(
     L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
     uint64_t physical_address;
-    if (!translate<ITLB_SETS>(core->itlb, mem, virtual_address, &physical_address)) {
+    if (!translate<ITLB_SETS>(core->itlb, core->active_pml4, mem, virtual_address, &physical_address)) {
         return false;
     }
 

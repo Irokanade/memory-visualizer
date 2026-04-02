@@ -1,45 +1,33 @@
 #include "cpu.h"
 #include "memory.h"
 #include "core.h"
+#include "os.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
-// 256x256 matrix of int32_t
-static constexpr int      N         = 256;
-static constexpr uint64_t MEM_SIZE  = 16 * 1024 * 1024; // 16MB physical
 
-// Physical layout (identity-mapped: VA == PA for the matrix range):
-//   0x000000 — PDPT  (8KB)
-//   0x002000 — PD    (8KB)
-//   0x004000 — PT    (8KB)
-//   0x010000 — matrix data (N*N*4 = 256KB, 64 pages)
-static constexpr uint64_t PDPT_PA   = 0x000000;
-static constexpr uint64_t PD_PA     = 0x002000;
-static constexpr uint64_t PT_PA     = 0x004000;
-static constexpr uint64_t MATRIX_PA = 0x010000;
-static constexpr uint64_t MATRIX_VA = 0x010000;
+static constexpr int N = 256;
+static constexpr uint64_t MEM_SIZE = 16 * 1024 * 1024; // 16MB physical
 
-static void setup_memory(Memory *mem) {
-    // PML4[0] → PDPT
-    mem->pml4.entries[0] = { PDPT_PA, true };
+static constexpr uint64_t MATRIX_VA          = VA_DATA;           // 0x600000
+static constexpr uint64_t FALSE_SHARING_VA   = VA_DATA + 0x100000; // 0x700000 — same cache line
+static constexpr uint64_t NO_FALSE_SHARING_VA = VA_DATA + 0x200000; // 0x800000 — different cache lines
 
-    // PDPT[0] → PD
-    auto *pdpt = reinterpret_cast<PageTable *>(&mem->data[PDPT_PA]);
-    pdpt->entries[0] = { PD_PA, true };
+static constexpr int ITERS = 100000;
 
-    // PD[0] → PT
-    auto *pd = reinterpret_cast<PageTable *>(&mem->data[PD_PA]);
-    pd->entries[0] = { PT_PA, true };
-
-    // PT: map each matrix page (VA == PA identity)
-    auto *pt        = reinterpret_cast<PageTable *>(&mem->data[PT_PA]);
-    uint64_t base   = (MATRIX_VA >> 12) & 0x1FF; // PT index of first matrix page
-    uint64_t npages = (static_cast<uint64_t>(N) * N * sizeof(int32_t) + 0xFFF) >> 12;
+static void setup_address_space(Process *proc, FrameAllocator *fa, Memory *mem) {
+    // Map matrix pages (N*N*4 bytes = 256KB = 64 pages)
+    uint64_t npages = (static_cast<uint64_t>(N) * N * sizeof(int32_t) + PAGE_SIZE - 1) / PAGE_SIZE;
     for (uint64_t i = 0; i < npages; i++) {
-        pt->entries[base + i] = { MATRIX_PA + i * 0x1000, true };
+        alloc_and_map(proc, fa, mem, MATRIX_VA + i * PAGE_SIZE, true, true);
     }
+
+    // Map counter pages for false sharing demos (one page each)
+    alloc_and_map(proc, fa, mem, FALSE_SHARING_VA,    true, true);
+    alloc_and_map(proc, fa, mem, NO_FALSE_SHARING_VA, true, true);
 }
 
 static void run_row_major(CPU *cpu, Memory *mem) {
@@ -62,9 +50,35 @@ static void run_col_major(CPU *cpu, Memory *mem) {
     }
 }
 
+static void counter_rmw(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t addr) {
+    uint32_t val;
+    for (int i = 0; i < ITERS; i++) {
+        cpu_read (cpu, core_id, mem, addr, reinterpret_cast<uint8_t *>(&val), sizeof(val));
+        val++;
+        cpu_write(cpu, core_id, mem, addr, reinterpret_cast<uint8_t *>(&val), sizeof(val));
+        std::this_thread::yield(); // hints the OS to switch threads to increase interleaving
+    }
+}
+
+static void run_false_sharing(CPU *cpu, Memory *mem) {
+    // Both counters on the same 64-byte cache line.
+    std::thread t0([&]{ counter_rmw(cpu, 0, mem, FALSE_SHARING_VA); });
+    std::thread t1([&]{ counter_rmw(cpu, 1, mem, FALSE_SHARING_VA + sizeof(uint32_t)); });
+    t0.join();
+    t1.join();
+}
+
+static void run_no_false_sharing(CPU *cpu, Memory *mem) {
+    // Counters 64 bytes apart — each on its own cache line.
+    std::thread t0([&]{ counter_rmw(cpu, 0, mem, NO_FALSE_SHARING_VA); });
+    std::thread t1([&]{ counter_rmw(cpu, 1, mem, NO_FALSE_SHARING_VA + LINE_SIZE); });
+    t0.join();
+    t1.join();
+}
+
 static void print_pmc(const char *label, const PerfCounters *pmc) {
     uint64_t total = pmc->l1d_hits + pmc->l2_hits + pmc->mem_fetches;
-    printf("%-14s  l1d=%6llu  l2=%6llu  mem=%6llu  total=%6llu\n",
+    printf("%-20s  l1d=%6llu  l2=%6llu  mem=%6llu  total=%6llu\n",
         label,
         (unsigned long long)pmc->l1d_hits,
         (unsigned long long)pmc->l2_hits,
@@ -79,18 +93,50 @@ int main() {
     Memory mem{};
     mem.data = phys;
     mem.size = MEM_SIZE;
-    setup_memory(&mem);
 
-    CPU *cpu = new CPU{};
+    FrameAllocator fa{};
+    fa.watermark = PAGE_SIZE;
+    fa.limit = MEM_SIZE;
 
+    Process *proc = process_create(1);
+    setup_address_space(proc, &fa, &mem);
+
+    CPU *cpu;
+
+    // --- matrix traversal ---
+    printf("=== matrix traversal (single core) ===\n");
+    cpu = new CPU{};
+    process_switch(cpu, proc);
     run_row_major(cpu, &mem);
     print_pmc("row-major:", &cpu->cores[0].pmc);
     delete cpu;
 
     cpu = new CPU{};
+    process_switch(cpu, proc);
     run_col_major(cpu, &mem);
     print_pmc("col-major:", &cpu->cores[0].pmc);
     delete cpu;
+
+    // --- false sharing ---
+    printf("\n=== false sharing (2 cores, %d iters each, yield between iters) ===\n", ITERS);
+    printf("  false sharing:    counters 4 bytes apart (same cache line)\n");
+    printf("  no false sharing: counters 64 bytes apart (different cache lines)\n\n");
+
+    cpu = new CPU{};
+    process_switch(cpu, proc);
+    run_false_sharing(cpu, &mem);
+    print_pmc("false-share c0:", &cpu->cores[0].pmc);
+    print_pmc("false-share c1:", &cpu->cores[1].pmc);
+    delete cpu;
+
+    cpu = new CPU{};
+    process_switch(cpu, proc);
+    run_no_false_sharing(cpu, &mem);
+    print_pmc("no-false-share c0:", &cpu->cores[0].pmc);
+    print_pmc("no-false-share c1:", &cpu->cores[1].pmc);
+    delete cpu;
+
+    delete proc;
     std::free(phys);
     return 0;
 }
