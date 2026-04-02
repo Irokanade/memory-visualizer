@@ -397,10 +397,6 @@ bool cpu_read(
     uint8_t l2_hit_way;
 
     if (l2_find_way(l2Set, l2_tag, &l2_hit_way)) {
-        // Prefetch hit: no prior L1 owner — prefetcher installed this line.
-        // Must be captured before evict_l1 or l2_cache_read_way modify core_valid fields.
-        bool pf_hit = (l2Set->core_valid_d[l2_hit_way] == 0 && l2Set->core_valid_i[l2_hit_way] == 0);
-
         uint8_t victim = evict_l1<false>(l1Set, l1_index, l2Sets, core_id);
 
         // l2_cache_read_way sets this core's bit in core_valid_d first;
@@ -423,7 +419,7 @@ bool cpu_read(
             fill_state = MESIState::EXCLUSIVE;
         }
 
-        pf_hit ? core->pmc.l2_prefetch_hits++ : core->pmc.l2_hits++;
+        core->pmc.l2_hits++;
         l1_cache_fill(l1Set, l1_tag, victim, line, fill_state);
         std::memcpy(data, line + offset, data_size);
         return true;
@@ -512,10 +508,6 @@ bool cpu_write(
         // Fetch full line from L2 for write-allocate
         std::memcpy(line, l2Set->data[l2_hit_way], LINE_SIZE);
 
-        // Prefetch hit: no prior L1 owner in either D or I — prefetcher installed this line.
-        // Must be captured before core_valid fields are modified below.
-        bool pf_hit = (l2Set->core_valid_d[l2_hit_way] == 0 && l2Set->core_valid_i[l2_hit_way] == 0);
-
         // RFO: snoop and invalidate all other L1D copies (BusRdX), capture MODIFIED data
         uint8_t other_sharers = l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
         snoop_invalidate_peers(cores, other_sharers, l1_index, l1_tag,
@@ -535,7 +527,7 @@ bool cpu_write(
         l2Set->state[l2_hit_way] = MESIState::MODIFIED;
         plru_update<uint16_t, NUM_L2_WAYS>(&l2Set->plru_bits, l2_hit_way);
 
-        pf_hit ? core->pmc.l2_prefetch_hits++ : core->pmc.l2_hits++;
+        core->pmc.l2_hits++;
         return true;
     }
 
@@ -602,9 +594,7 @@ bool cpu_fetch(
             std::abort();
         }
 
-        bool pf_hit = (l2Set->core_valid_d[l2_hit_way] == 0 && l2Set->core_valid_i[l2_hit_way] == 0);
 
-        // L1I lines are always SHARED or INVALID — evict_l1<true> handles clean eviction
         uint8_t victim = evict_l1<true>(l1Set, l1_index, l2Sets, core_id);
         l2_cache_read_way(l2Set, core_id, l2_hit_way, line, &l2Set->core_valid_i[l2_hit_way]);
         uint8_t d_sharers = l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
@@ -615,7 +605,7 @@ bool cpu_fetch(
 
         // L1I always fills as SHARED (SI protocol — instruction pages are read-only)
         l1_cache_fill(l1Set, l1_tag, victim, line, MESIState::SHARED);
-        pf_hit ? core->pmc.l2_prefetch_hits++ : core->pmc.l2_hits++;
+        core->pmc.l2_hits++;
         std::memcpy(data, line + offset, data_size);
         return true;
     }

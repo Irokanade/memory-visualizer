@@ -63,12 +63,11 @@ static void run_col_major(CPU *cpu, Memory *mem) {
 }
 
 static void print_pmc(const char *label, const PerfCounters *pmc) {
-    uint64_t total = pmc->l1d_hits + pmc->l2_hits + pmc->l2_prefetch_hits + pmc->mem_fetches;
-    printf("%-14s  l1d=%6llu  l2=%6llu  pf_hits=%6llu  mem=%6llu  total=%6llu\n",
+    uint64_t total = pmc->l1d_hits + pmc->l2_hits + pmc->mem_fetches;
+    printf("%-14s  l1d=%6llu  l2=%6llu  mem=%6llu  total=%6llu\n",
         label,
         (unsigned long long)pmc->l1d_hits,
         (unsigned long long)pmc->l2_hits,
-        (unsigned long long)pmc->l2_prefetch_hits,
         (unsigned long long)pmc->mem_fetches,
         (unsigned long long)total);
 }

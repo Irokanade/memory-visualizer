@@ -9,7 +9,6 @@ struct PerfCounters {
     uint64_t l1d_hits;
     uint64_t l1i_hits;
     uint64_t l2_hits;
-    uint64_t l2_prefetch_hits;
     uint64_t mem_fetches;
 };
 
