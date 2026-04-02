@@ -612,8 +612,6 @@ bool cpu_fetch(
         uint8_t i_sharers = l2Set->core_valid_i[l2_hit_way] & ~(1 << core_id);
         if (d_sharers | i_sharers) {
             snoop_downgrade_peers(cores, d_sharers, l1_index, l1_tag, line, l2Set, l2_hit_way);
-        } else {
-            l2Set->state[l2_hit_way] = MESIState::SHARED;
         }
 
         // L1I always fills as SHARED (SI protocol — instruction pages are read-only)
