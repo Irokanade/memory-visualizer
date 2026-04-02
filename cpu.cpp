@@ -218,9 +218,8 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *me
                 peer_l1d->state[w] = MESIState::INVALID;
             } else {
                 // Stale core_valid_d — L1 line is gone but bit was never cleared.
-                // If L2 is MODIFIED, the fresh data is unrecoverable: a prior write path
-                // failed to keep the line in L1D. Abort rather than silently corrupt memory.
-                if (l2Set->state[l2_victim] == MESIState::MODIFIED) std::abort();
+                // Any stale bit is a bug: evict_l1 must always clear core_valid_d on eviction.
+                std::abort();
             }
         }
 
