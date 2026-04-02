@@ -5,6 +5,14 @@
 #include <cstdint>
 
 
+struct PerfCounters {
+    uint64_t l1d_hits;
+    uint64_t l1i_hits;
+    uint64_t l2_hits;
+    uint64_t l2_prefetch_hits;
+    uint64_t mem_fetches;
+};
+
 enum class StreamDirection : int8_t { UNKNOWN = 0, FORWARD = 1, BACKWARD = -1 };
 enum class StreamConfidence : uint8_t { INVALID, TRAINING, STEADY };
 
@@ -47,7 +55,6 @@ constexpr uint8_t L1_SETS      = 64;
 constexpr uint8_t L1_DTLB_SETS = 4;
 constexpr uint8_t L2_DTLB_SETS = 64;
 constexpr uint8_t ITLB_SETS    = 32;
-
 struct Core {
     L1Set  l1d[L1_SETS];
     L1Set  l1i[L1_SETS];   // SI protocol in hardware; filled via cpu_fetch, back-invalidated by evict_l2_victim
@@ -56,6 +63,7 @@ struct Core {
     TLBSet itlb[ITLB_SETS];
     uint8_t core_id;
     Prefetcher prefetcher;
+    PerfCounters pmc;
 };
 
 bool tlb_lookup(TLBSet *set, uint64_t virtual_page_num, uint64_t *physical_frame);
