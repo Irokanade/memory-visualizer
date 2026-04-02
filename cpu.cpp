@@ -321,7 +321,7 @@ static void pf_stream_on_miss(Prefetcher *pf, Core *cores, L2Set *l2Sets, Memory
         // stride read after direction is set — valid for both TRAINING→STEADY and STEADY paths.
         int8_t stride = static_cast<int8_t>(stream->direction);
         stream->last_line = miss_line;
-        for (uint8_t issued = 0; issued < PREFETCH_DISTANCE; issued++) {
+        for (uint8_t issued = 0; issued < PREFETCH_DISTANCE + 1; issued++) {
             // Signed gap: positive when prefetch_head is ahead in the stream direction.
             int64_t gap = (static_cast<int64_t>(stream->prefetch_head)
                            - static_cast<int64_t>(miss_line))
