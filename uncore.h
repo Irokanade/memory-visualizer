@@ -27,5 +27,6 @@ void l2_cache_read_way(L2Set *l2Set, uint8_t core_id, uint8_t way, uint8_t *data
 void l2_cache_write_way(L2Set *l2Set, uint8_t core_id, uint8_t way, uint8_t *data);
 void l2_clear_core_valid_way(uint8_t *core_valid, uint8_t core_id);
 void l2_cache_fill(L2Set *l2Set, uint8_t core_id, uint64_t tag, uint8_t way, uint8_t *data, MESIState state, uint8_t *core_valid_set, uint8_t *core_valid_clr);
+void l2_cache_fill(L2Set *l2Set, uint64_t tag, uint8_t way, uint8_t *data, MESIState state); // prefetch: no L1 owner
 
 #endif // UNCORE_H

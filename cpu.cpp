@@ -209,6 +209,11 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *me
                     l2Set->state[l2_victim] = MESIState::MODIFIED;
                 }
                 peer_l1d->state[w] = MESIState::INVALID;
+            } else {
+                // Stale core_valid_d — L1 line is gone but bit was never cleared.
+                // If L2 is MODIFIED, the fresh data is unrecoverable: a prior write path
+                // failed to keep the line in L1D. Abort rather than silently corrupt memory.
+                if (l2Set->state[l2_victim] == MESIState::MODIFIED) std::abort();
             }
         }
 
@@ -257,11 +262,8 @@ static bool pf_fill_l2(Core *cores, L2Set *l2Sets, Memory *mem, uint64_t from_li
         return true; // already present
     }
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
-    constexpr uint8_t NO_CORE = 0; // dummy — core_valid_d zeroed immediately after
-    l2_cache_fill(l2Set, NO_CORE, l2_tag, l2_victim, &mem->data[next_line],
-                  MESIState::EXCLUSIVE,
-                  &l2Set->core_valid_d[l2_victim], &l2Set->core_valid_i[l2_victim]);
-    l2Set->core_valid_d[l2_victim] = 0; // prefetch has no L1 owner
+    // Prefetch has no L1 owner — use the no-core overload which sets neither core_valid field.
+    l2_cache_fill(l2Set, l2_tag, l2_victim, &mem->data[next_line], MESIState::EXCLUSIVE);
     return true;
 }
 
@@ -571,16 +573,16 @@ bool cpu_fetch(
     uint8_t l2_hit_way;
 
     if (l2_find_way(l2Set, l2_tag, &l2_hit_way)) {
-        // L1I lines are always SHARED or INVALID — evict_l1<true> handles clean eviction
-        uint8_t victim = evict_l1<true>(l1Set, l1_index, l2Sets, core_id);
-
-        l2_cache_read_way(l2Set, core_id, l2_hit_way, line, &l2Set->core_valid_i[l2_hit_way]);
-
         // Instruction pages must not be dirty — fetching a MODIFIED line means SMC without flush.
-        // Hard abort in all build modes (not assert, which is stripped by NDEBUG).
+        // Check before any side effects (evict_l1, l2_cache_read_way) so nothing is committed
+        // to a state that is about to be declared unreachable.
         if (l2Set->state[l2_hit_way] == MESIState::MODIFIED) {
             std::abort();
         }
+
+        // L1I lines are always SHARED or INVALID — evict_l1<true> handles clean eviction
+        uint8_t victim = evict_l1<true>(l1Set, l1_index, l2Sets, core_id);
+        l2_cache_read_way(l2Set, core_id, l2_hit_way, line, &l2Set->core_valid_i[l2_hit_way]);
         // If other D/I sharers exist, downgrade L2→SHARED and force peer L1D E→S.
         // If this core is the sole holder, L2 stays EXCLUSIVE — matches hardware: L2 only
         // transitions to SHARED when a second cache fills from it.

@@ -42,6 +42,17 @@ void l2_cache_fill(L2Set *l2Set, uint8_t core_id, uint64_t tag, uint8_t way, uin
     plru_update<uint16_t, NUM_L2_WAYS>(&l2Set->plru_bits, way);
 }
 
+// Prefetch overload — no L1 owner, neither core_valid field is set.
+void l2_cache_fill(L2Set *l2Set, uint64_t tag, uint8_t way, uint8_t *data, MESIState state) {
+    if (l2Set->core_valid_d[way] != 0 || l2Set->core_valid_i[way] != 0) {
+        abort();
+    }
+    l2Set->tag[way] = tag;
+    l2Set->state[way] = state;
+    std::memcpy(l2Set->data[way], data, LINE_SIZE);
+    plru_update<uint16_t, NUM_L2_WAYS>(&l2Set->plru_bits, way);
+}
+
 void l2_cache_write_way(L2Set *l2Set, uint8_t core_id, uint8_t way, uint8_t *data) {
     std::memcpy(l2Set->data[way], data, LINE_SIZE);
     l2Set->state[way] = MESIState::MODIFIED;
