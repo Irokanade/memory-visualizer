@@ -93,18 +93,18 @@ extern "C" void cachesim_write(uint64_t addr, uint32_t size)
 
 extern "C" void cachesim_fetch(uint64_t addr, uint32_t size)
 {
-    ensure_page(addr);
-    uint8_t buf[15];
-    __builtin_memcpy(buf, reinterpret_cast<void *>(addr), size);
-    cpu_fetch(&cpu, 0, &mem, addr, buf, size);
-    if (is_cacheline_split(addr, size)) {
-        uint64_t addr2 =
-            (addr + size - 1) & ~static_cast<uint64_t>(LINE_SIZE - 1);
-        uint8_t size2 = static_cast<uint8_t>((addr + size) - addr2);
-        ensure_page(addr2);
-        uint8_t buf2[15];
-        __builtin_memcpy(buf2, reinterpret_cast<void *>(addr2), size2);
-        cpu_fetch(&cpu, 0, &mem, addr2, buf2, size2);
+    uint64_t end = addr + size;
+    while (addr < end) {
+        uint64_t line_end = ((addr >> 6) + 1) << 6;
+        if (line_end > end) {
+            line_end = end;
+        }
+        uint8_t chunk = static_cast<uint8_t>(line_end - addr);
+        ensure_page(addr);
+        uint8_t buf[LINE_SIZE];
+        __builtin_memcpy(buf, reinterpret_cast<void *>(addr), chunk);
+        cpu_fetch(&cpu, 0, &mem, addr, buf, chunk);
+        addr = line_end;
     }
 }
 
@@ -112,15 +112,14 @@ __attribute__((destructor)) extern "C" void cachesim_finish(void)
 {
     uint64_t total_d = 0;
 
-    printf("%-12s  %10s  %10s  %10s  %10s\n", "core", "l1d_hits", "l2_hits",
-           "mem_fetches", "l1i_hits");
+    printf("%-12s  %10s  %10s  %10s\n", "core", "l1d_hits", "l2_hits",
+           "mem_fetches");
 
     for (uint8_t i = 0; i < NUM_CORES; i++) {
         const PerfCounters *p = &cpu.cores[i].pmc;
-        printf("core%-8u  %10llu  %10llu  %10llu  %10llu\n", i,
+        printf("core%-8u  %10llu  %10llu  %10llu\n", i,
                (unsigned long long)p->l1d_hits, (unsigned long long)p->l2_hits,
-               (unsigned long long)p->mem_fetches,
-               (unsigned long long)p->l1i_hits);
+               (unsigned long long)p->mem_fetches);
         total_d += p->l1d_hits + p->l2_hits + p->mem_fetches;
     }
 

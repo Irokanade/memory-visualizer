@@ -30,3 +30,9 @@ Or compile manually:
 make instrument SRC=your_program.c
 DYLD_LIBRARY_PATH=build ./build/your_program
 ```
+
+#### Limitations
+
+- **Data cache only** — the simulator has full L1I/ITLB/instruction prefetcher support (`cpu_fetch`), but the LLVM pass currently only instruments data loads/stores. Instruction cache simulation requires real instruction addresses which are not available at the IR level. The pass will be updated to support this in the future.
+- **Requires source code** — unlike cachegrind, programs must be recompiled with the LLVM pass.
+- **Fake physical addresses** — virtual addresses are real, but PA→cache set mapping uses simulator-assigned PAs. L1 indexing is exact (index bits within page offset). L2 conflict misses may differ from real hardware.
