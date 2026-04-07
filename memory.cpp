@@ -1,6 +1,8 @@
 #include "memory.h"
 
-bool page_walk(PageTable *pml4, Memory *mem, uint64_t virtual_address, uint64_t *physical_address) {
+bool page_walk(PageTable *pml4, Memory *mem, uint64_t virtual_address,
+               uint64_t *physical_address)
+{
     PageTable *table = pml4;
 
     for (int level = 3; level >= 0; level--) {
@@ -12,7 +14,8 @@ bool page_walk(PageTable *pml4, Memory *mem, uint64_t virtual_address, uint64_t 
         }
 
         if (level == 0) {
-            *physical_address = entry->physical_address | (virtual_address & 0xFFF);
+            *physical_address =
+                entry->physical_address | (virtual_address & 0xFFF);
             return true;
         }
 
@@ -20,9 +23,9 @@ bool page_walk(PageTable *pml4, Memory *mem, uint64_t virtual_address, uint64_t 
             entry->physical_address > mem->size - sizeof(PageTable)) {
             return false;
         }
-        table = reinterpret_cast<PageTable*>(&mem->data[entry->physical_address]);
+        table =
+            reinterpret_cast<PageTable *>(&mem->data[entry->physical_address]);
     }
 
     return false;
 }
-

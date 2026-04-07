@@ -20,6 +20,7 @@ struct Memory {
     uint64_t size;
 };
 
-bool page_walk(PageTable *pml4, Memory *mem, uint64_t virtual_address, uint64_t *physical_address);
+bool page_walk(PageTable *pml4, Memory *mem, uint64_t virtual_address,
+               uint64_t *physical_address);
 
 #endif // MEMORY_H

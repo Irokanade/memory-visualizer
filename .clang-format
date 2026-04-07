@@ -3,9 +3,4 @@ IndentWidth: 4
 AlignConsecutiveDeclarations: None
 AlignConsecutiveAssignments: None
 
-BreakBeforeBraces: Custom
-BraceWrapping:
-  AfterIf: true
-  AfterFor: false
-  AfterWhile: false
-  AfterDo: false
+BreakBeforeBraces: Linux

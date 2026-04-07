@@ -3,8 +3,8 @@
 
 #include <cstdint>
 
-template <typename T, uint8_t WAYS>
-void plru_update(T *plru_bits, uint8_t way) {
+template <typename T, uint8_t WAYS> void plru_update(T *plru_bits, uint8_t way)
+{
     uint8_t node = (WAYS - 1) + way;
 
     while (node > 0) {
@@ -15,8 +15,8 @@ void plru_update(T *plru_bits, uint8_t way) {
     }
 }
 
-template <typename T, uint8_t WAYS>
-uint8_t plru_victim(T plru_bits) {
+template <typename T, uint8_t WAYS> uint8_t plru_victim(T plru_bits)
+{
     uint8_t node = 0;
 
     while (node < WAYS - 1) {

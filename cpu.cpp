@@ -1,9 +1,9 @@
 #include "cpu.h"
 #include "core.h"
-#include "types.h"
-#include "uncore.h"
 #include "memory.h"
 #include "plru.h"
+#include "types.h"
+#include "uncore.h"
 
 #include <bit>
 #include <cstdint>
@@ -12,23 +12,21 @@
 #include <mutex>
 
 // BusRead snoop: downgrade each sharer's L1 copy M/E → S.
-// If a peer holds MODIFIED, its data is captured into line_inout and written back to L2.
-// L1I is intentionally not snooped — self-modifying code requires an explicit pipeline flush
-// (CPUID serialization on x86), not coherence protocol intervention. evict_l2 handles L1I
-// back-invalidation when the L2 line itself is evicted.
-static void snoop_downgrade_peers(
-    Core *cores,
-    uint8_t sharers,
-    uint16_t l1_index,
-    uint64_t l1_tag,
-    uint8_t *line_inout,
-    L2Set *l2Set,
-    uint8_t l2_hit_way)
+// If a peer holds MODIFIED, its data is captured into line_inout and written
+// back to L2. L1I is intentionally not snooped — self-modifying code requires
+// an explicit pipeline flush (CPUID serialization on x86), not coherence
+// protocol intervention. evict_l2 handles L1I back-invalidation when the L2
+// line itself is evicted.
+static void snoop_downgrade_peers(Core *cores, uint8_t sharers,
+                                  uint16_t l1_index, uint64_t l1_tag,
+                                  uint8_t *line_inout, L2Set *l2Set,
+                                  uint8_t l2_hit_way)
 {
-    // L2 transitions to SHARED unconditionally — other_sharers > 0 when called, so SHARED
-    // is always correct. Setting it before the loop also handles stale core_valid entries
-    // where find_l1_way fails. sharers may be 0 (e.g. only i_sharers present from cpu_fetch)
-    // in which case the loop is a no-op but the L2 state update still applies.
+    // L2 transitions to SHARED unconditionally — other_sharers > 0 when called,
+    // so SHARED is always correct. Setting it before the loop also handles
+    // stale core_valid entries where find_l1_way fails. sharers may be 0 (e.g.
+    // only i_sharers present from cpu_fetch) in which case the loop is a no-op
+    // but the L2 state update still applies.
     l2Set->state[l2_hit_way] = MESIState::SHARED;
 
     while (sharers) {
@@ -47,13 +45,11 @@ static void snoop_downgrade_peers(
     }
 }
 
-// SMC back-invalidate: a store to a code page must invalidate all peer L1I copies.
-// Caller is responsible for zeroing core_valid_i[l2_way] after this call.
-static void snoop_invalidate_peers_i(
-    Core *cores,
-    uint8_t i_sharers,
-    uint16_t l1_index,
-    uint64_t l1_tag)
+// SMC back-invalidate: a store to a code page must invalidate all peer L1I
+// copies. Caller is responsible for zeroing core_valid_i[l2_way] after this
+// call.
+static void snoop_invalidate_peers_i(Core *cores, uint8_t i_sharers,
+                                     uint16_t l1_index, uint64_t l1_tag)
 {
     while (i_sharers) {
         uint8_t c = static_cast<uint8_t>(std::countr_zero(i_sharers));
@@ -67,16 +63,13 @@ static void snoop_invalidate_peers_i(
     }
 }
 
-// BusRdX / upgrade RFO snoop: invalidate each sharer's L1 copy and clear its core_valid bit.
-// If line_out != nullptr and the peer holds MODIFIED, fresh data is captured into line_out.
-static void snoop_invalidate_peers(
-    Core *cores,
-    uint8_t sharers,
-    uint16_t l1_index,
-    uint64_t l1_tag,
-    uint8_t *line_out,
-    L2Set *l2Set,
-    uint8_t l2_way)
+// BusRdX / upgrade RFO snoop: invalidate each sharer's L1 copy and clear its
+// core_valid bit. If line_out != nullptr and the peer holds MODIFIED, fresh
+// data is captured into line_out.
+static void snoop_invalidate_peers(Core *cores, uint8_t sharers,
+                                   uint16_t l1_index, uint64_t l1_tag,
+                                   uint8_t *line_out, L2Set *l2Set,
+                                   uint8_t l2_way)
 {
     while (sharers) {
         uint8_t c = static_cast<uint8_t>(std::countr_zero(sharers));
@@ -86,10 +79,11 @@ static void snoop_invalidate_peers(
         uint8_t w;
         if (find_l1_way(peer, l1_tag, &w)) {
             if (line_out && peer->state[w] == MESIState::MODIFIED) {
-                // Capture fresh data for the caller — L2 data is intentionally NOT updated here.
-                // The line enters L1D as MODIFIED; evict_l2 will capture it from L1D before
-                // writing to memory. Updating L2 here would be redundant and diverge from
-                // the lazy write-back model.
+                // Capture fresh data for the caller — L2 data is intentionally
+                // NOT updated here. The line enters L1D as MODIFIED; evict_l2
+                // will capture it from L1D before writing to memory. Updating
+                // L2 here would be redundant and diverge from the lazy
+                // write-back model.
                 std::memcpy(line_out, peer->data[w], LINE_SIZE);
             }
             peer->state[w] = MESIState::INVALID;
@@ -98,8 +92,10 @@ static void snoop_invalidate_peers(
     }
 }
 
-template<uint8_t TLB_L1_SETS>
-static bool translate(TLBSet *tlb_l1_array, PageTable *pml4, Memory *mem, uint64_t virtual_address, uint64_t *physical_address) {
+template <uint8_t TLB_L1_SETS>
+static bool translate(TLBSet *tlb_l1_array, PageTable *pml4, Memory *mem,
+                      uint64_t virtual_address, uint64_t *physical_address)
+{
     uint64_t virtual_page_num = to_frame(virtual_address);
     TLBSet *tlb_l1 = &tlb_l1_array[virtual_page_num & (TLB_L1_SETS - 1)];
     uint64_t physical_frame;
@@ -117,8 +113,11 @@ static bool translate(TLBSet *tlb_l1_array, PageTable *pml4, Memory *mem, uint64
     return false; // page fault
 }
 
-template<uint8_t TLB_L1_SETS, uint8_t TLB_L2_SETS>
-static bool translate(TLBSet *tlb_l1_array, TLBSet *tlb_l2_array, PageTable *pml4, Memory *mem, uint64_t virtual_address, uint64_t *physical_address) {
+template <uint8_t TLB_L1_SETS, uint8_t TLB_L2_SETS>
+static bool translate(TLBSet *tlb_l1_array, TLBSet *tlb_l2_array,
+                      PageTable *pml4, Memory *mem, uint64_t virtual_address,
+                      uint64_t *physical_address)
+{
     uint64_t virtual_page_num = to_frame(virtual_address);
     TLBSet *tlb_l1 = &tlb_l1_array[virtual_page_num & (TLB_L1_SETS - 1)];
     TLBSet *tlb_l2 = &tlb_l2_array[virtual_page_num & (TLB_L2_SETS - 1)];
@@ -145,10 +144,13 @@ static bool translate(TLBSet *tlb_l1_array, TLBSet *tlb_l2_array, PageTable *pml
     return false; // page fault
 }
 
-template<bool IS_INSTR>
-static uint8_t evict_l1(L1Set *l1Set, uint16_t l1_index, L2Set *l2Sets, uint8_t core_id) {
-    // Prefer any INVALID way — real hardware knows back-invalidated slots are free and
-    // uses them before evicting a valid line. Scanning all ways matches that behavior.
+template <bool IS_INSTR>
+static uint8_t evict_l1(L1Set *l1Set, uint16_t l1_index, L2Set *l2Sets,
+                        uint8_t core_id)
+{
+    // Prefer any INVALID way — real hardware knows back-invalidated slots are
+    // free and uses them before evicting a valid line. Scanning all ways
+    // matches that behavior.
     for (uint8_t w = 0; w < NUM_L1_WAYS; w++) {
         if (l1Set->state[w] == MESIState::INVALID) {
             return w;
@@ -162,7 +164,8 @@ static uint8_t evict_l1(L1Set *l1Set, uint16_t l1_index, L2Set *l2Sets, uint8_t 
     uint64_t l2_tag = l2_to_tag(victim_addr);
     uint8_t l2_way;
     if (!l2_find_way(l2Set, l2_tag, &l2_way)) {
-        // Inclusive invariant violated — this is a hard bug; abort in all build modes.
+        // Inclusive invariant violated — this is a hard bug; abort in all build
+        // modes.
         std::abort();
     }
 
@@ -171,14 +174,16 @@ static uint8_t evict_l1(L1Set *l1Set, uint16_t l1_index, L2Set *l2Sets, uint8_t 
             l2_cache_write_way(l2Set, core_id, l2_way, l1Set->data[victim]);
         } else {
             l2_clear_core_valid_way(&l2Set->core_valid_d[l2_way], core_id);
-            if (l2Set->core_valid_d[l2_way] == 0 && l2Set->core_valid_i[l2_way] == 0 &&
+            if (l2Set->core_valid_d[l2_way] == 0 &&
+                l2Set->core_valid_i[l2_way] == 0 &&
                 l2Set->state[l2_way] == MESIState::SHARED) {
                 l2Set->state[l2_way] = MESIState::EXCLUSIVE;
             }
         }
     } else {
         l2_clear_core_valid_way(&l2Set->core_valid_i[l2_way], core_id);
-        if (l2Set->core_valid_d[l2_way] == 0 && l2Set->core_valid_i[l2_way] == 0 &&
+        if (l2Set->core_valid_d[l2_way] == 0 &&
+            l2Set->core_valid_i[l2_way] == 0 &&
             l2Set->state[l2_way] == MESIState::SHARED) {
             l2Set->state[l2_way] = MESIState::EXCLUSIVE;
         }
@@ -188,7 +193,9 @@ static uint8_t evict_l1(L1Set *l1Set, uint16_t l1_index, L2Set *l2Sets, uint8_t 
     return victim;
 }
 
-static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *mem) {
+static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index,
+                        Memory *mem)
+{
     for (uint8_t w = 0; w < NUM_L2_WAYS; w++) {
         if (l2Set->state[w] == MESIState::INVALID) {
             return w;
@@ -213,13 +220,15 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *me
             uint8_t w;
             if (find_l1_way(peer_l1d, victim_l1_tag, &w)) {
                 if (peer_l1d->state[w] == MESIState::MODIFIED) {
-                    std::memcpy(l2Set->data[l2_victim], peer_l1d->data[w], LINE_SIZE);
+                    std::memcpy(l2Set->data[l2_victim], peer_l1d->data[w],
+                                LINE_SIZE);
                     l2Set->state[l2_victim] = MESIState::MODIFIED;
                 }
                 peer_l1d->state[w] = MESIState::INVALID;
             } else {
-                // Stale core_valid_d — L1 line is gone but bit was never cleared.
-                // Any stale bit is a bug: evict_l1 must always clear core_valid_d on eviction.
+                // Stale core_valid_d — L1 line is gone but bit was never
+                // cleared. Any stale bit is a bug: evict_l1 must always clear
+                // core_valid_d on eviction.
                 std::abort();
             }
         }
@@ -238,7 +247,8 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *me
         if (l2_victim_addr + LINE_SIZE > mem->size) {
             std::abort();
         }
-        std::memcpy(&mem->data[l2_victim_addr], l2Set->data[l2_victim], LINE_SIZE);
+        std::memcpy(&mem->data[l2_victim_addr], l2Set->data[l2_victim],
+                    LINE_SIZE);
     }
 
     // Clear tracking bitmasks so l2_cache_fill's precondition assert passes.
@@ -250,11 +260,15 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index, Memory *me
 }
 
 // Issue a silent prefetch into L2 only — no L1 fill, no owner tracking.
-// Returns true if the line was (or already was) in L2, false if blocked by page boundary
-// or bounds — caller should stop the burst and demote the stream to TRAINING.
-static bool pf_fill_l2(Core *cores, L2Set *l2Sets, Memory *mem, uint64_t from_line, uint64_t next_line) {
+// Returns true if the line was (or already was) in L2, false if blocked by page
+// boundary or bounds — caller should stop the burst and demote the stream to
+// TRAINING.
+static bool pf_fill_l2(Core *cores, L2Set *l2Sets, Memory *mem,
+                       uint64_t from_line, uint64_t next_line)
+{
     // Never cross a 4KB page boundary (hardware constraint, per Drepper §6.3)
-    if ((next_line & ~static_cast<uint64_t>(0xFFF)) != (from_line & ~static_cast<uint64_t>(0xFFF))) {
+    if ((next_line & ~static_cast<uint64_t>(0xFFF)) !=
+        (from_line & ~static_cast<uint64_t>(0xFFF))) {
         return false;
     }
     // Guard against backward-wrap near address 0 and forward out-of-bounds.
@@ -269,20 +283,28 @@ static bool pf_fill_l2(Core *cores, L2Set *l2Sets, Memory *mem, uint64_t from_li
         return true; // already present
     }
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
-    // Prefetch has no L1 owner — use the no-core overload which sets neither core_valid field.
-    l2_cache_fill(l2Set, l2_tag, l2_victim, &mem->data[next_line], MESIState::EXCLUSIVE);
+    // Prefetch has no L1 owner — use the no-core overload which sets neither
+    // core_valid field.
+    l2_cache_fill(l2Set, l2_tag, l2_victim, &mem->data[next_line],
+                  MESIState::EXCLUSIVE);
     return true;
 }
 
-// Next-line instruction prefetcher — unconditionally prefetches the line after an L1I miss.
-// No stream detection: instruction fetch is almost always sequential.
-static void pf_nextline_on_miss(Core *cores, L2Set *l2Sets, Memory *mem, uint64_t miss_line) {
+// Next-line instruction prefetcher — unconditionally prefetches the line after
+// an L1I miss. No stream detection: instruction fetch is almost always
+// sequential.
+static void pf_nextline_on_miss(Core *cores, L2Set *l2Sets, Memory *mem,
+                                uint64_t miss_line)
+{
     pf_fill_l2(cores, l2Sets, mem, miss_line, miss_line + LINE_SIZE);
 }
 
-// Stream detector — called on every L2 data demand miss. Trains the stream table and
-// burst-prefetches into L2 for confirmed streams. Never crosses 4KB page boundaries.
-static void pf_stream_on_miss(Prefetcher *pf, Core *cores, L2Set *l2Sets, Memory *mem, uint64_t miss_line) {
+// Stream detector — called on every L2 data demand miss. Trains the stream
+// table and burst-prefetches into L2 for confirmed streams. Never crosses 4KB
+// page boundaries.
+static void pf_stream_on_miss(Prefetcher *pf, Core *cores, L2Set *l2Sets,
+                              Memory *mem, uint64_t miss_line)
+{
     for (uint8_t i = 0; i < NUM_STREAMS; i++) {
         Stream *stream = &pf->streams[i];
 
@@ -292,59 +314,66 @@ static void pf_stream_on_miss(Prefetcher *pf, Core *cores, L2Set *l2Sets, Memory
 
         if (stream->confidence == StreamConfidence::TRAINING) {
             if (miss_line == stream->last_line + LINE_SIZE) {
-                stream->direction  = StreamDirection::FORWARD;
+                stream->direction = StreamDirection::FORWARD;
                 stream->confidence = StreamConfidence::STEADY;
                 stream->prefetch_head = miss_line;
             } else if (miss_line == stream->last_line - LINE_SIZE) {
-                stream->direction  = StreamDirection::BACKWARD;
+                stream->direction = StreamDirection::BACKWARD;
                 stream->confidence = StreamConfidence::STEADY;
                 stream->prefetch_head = miss_line;
             } else {
                 // No match — leave entry untouched and let LRU age it out.
-                // Hardware behavior: content-addressed lookup finds at most one match;
-                // mismatching entries are never restarted in-place.
+                // Hardware behavior: content-addressed lookup finds at most one
+                // match; mismatching entries are never restarted in-place.
                 continue;
             }
         } else {
-            // STEADY match: miss must be within [last_line+stride .. prefetch_head+stride].
-            // Demand hits inside the prefetch window are L2 hits and don't call pf_stream_on_miss,
-            // so the next miss arrives at prefetch_head+stride, not last_line+stride.
-            // Signed gap handles both FORWARD (+1) and BACKWARD (-1) without branching.
-            int8_t  dir              = static_cast<int8_t>(stream->direction);
-            int64_t dist_from_last   = (static_cast<int64_t>(miss_line)
-                                        - static_cast<int64_t>(stream->last_line))
-                                       * static_cast<int64_t>(dir);
-            int64_t dist_from_head   = (static_cast<int64_t>(miss_line)
-                                        - static_cast<int64_t>(stream->prefetch_head))
-                                       * static_cast<int64_t>(dir);
+            // STEADY match: miss must be within [last_line+stride ..
+            // prefetch_head+stride]. Demand hits inside the prefetch window are
+            // L2 hits and don't call pf_stream_on_miss, so the next miss
+            // arrives at prefetch_head+stride, not last_line+stride. Signed gap
+            // handles both FORWARD (+1) and BACKWARD (-1) without branching.
+            int8_t dir = static_cast<int8_t>(stream->direction);
+            int64_t dist_from_last = (static_cast<int64_t>(miss_line) -
+                                      static_cast<int64_t>(stream->last_line)) *
+                                     static_cast<int64_t>(dir);
+            int64_t dist_from_head =
+                (static_cast<int64_t>(miss_line) -
+                 static_cast<int64_t>(stream->prefetch_head)) *
+                static_cast<int64_t>(dir);
             if (dist_from_last < static_cast<int64_t>(LINE_SIZE) ||
-                dist_from_head  > static_cast<int64_t>(LINE_SIZE)) {
+                dist_from_head > static_cast<int64_t>(LINE_SIZE)) {
                 continue;
             }
         }
 
-        // Matched — advance demand pointer, then burst-prefetch until prefetch_head
-        // is PREFETCH_DISTANCE lines ahead of last_line (building lookahead distance).
-        // If a prefetch is blocked (page boundary or bounds), demote to TRAINING so the
-        // slot can be reclaimed rather than sitting stuck at the boundary forever.
-        // stride read after direction is set — valid for both TRAINING→STEADY and STEADY paths.
+        // Matched — advance demand pointer, then burst-prefetch until
+        // prefetch_head is PREFETCH_DISTANCE lines ahead of last_line (building
+        // lookahead distance). If a prefetch is blocked (page boundary or
+        // bounds), demote to TRAINING so the slot can be reclaimed rather than
+        // sitting stuck at the boundary forever. stride read after direction is
+        // set — valid for both TRAINING→STEADY and STEADY paths.
         int8_t stride = static_cast<int8_t>(stream->direction);
         stream->last_line = miss_line;
         for (uint8_t issued = 0; issued < PREFETCH_DISTANCE + 1; issued++) {
-            // Signed gap: positive when prefetch_head is ahead in the stream direction.
-            int64_t gap = (static_cast<int64_t>(stream->prefetch_head)
-                           - static_cast<int64_t>(miss_line))
-                          * static_cast<int64_t>(stride);
-            if (gap >= static_cast<int64_t>(PREFETCH_DISTANCE) * LINE_SIZE) break;
-            uint64_t next = stream->prefetch_head
-                            + static_cast<uint64_t>(static_cast<int64_t>(stride) * LINE_SIZE);
+            // Signed gap: positive when prefetch_head is ahead in the stream
+            // direction.
+            int64_t gap = (static_cast<int64_t>(stream->prefetch_head) -
+                           static_cast<int64_t>(miss_line)) *
+                          static_cast<int64_t>(stride);
+            if (gap >= static_cast<int64_t>(PREFETCH_DISTANCE) * LINE_SIZE)
+                break;
+            uint64_t next =
+                stream->prefetch_head +
+                static_cast<uint64_t>(static_cast<int64_t>(stride) * LINE_SIZE);
             if (!pf_fill_l2(cores, l2Sets, mem, stream->prefetch_head, next)) {
                 // Blocked by page boundary or bounds — fully reset to TRAINING.
-                // Hardware resets the entry on demotion; direction is re-derived from the
-                // next two consecutive misses, so leaving it stale would be functionally
-                // equivalent but not accurate to hardware state.
+                // Hardware resets the entry on demotion; direction is
+                // re-derived from the next two consecutive misses, so leaving
+                // it stale would be functionally equivalent but not accurate to
+                // hardware state.
                 stream->confidence = StreamConfidence::TRAINING;
-                stream->direction  = StreamDirection::UNKNOWN;
+                stream->direction = StreamDirection::UNKNOWN;
                 break;
             }
             stream->prefetch_head = next;
@@ -362,20 +391,17 @@ static void pf_stream_on_miss(Prefetcher *pf, Core *cores, L2Set *l2Sets, Memory
     pf_lru_update(pf->lru_age, victim);
 }
 
-bool cpu_read(
-    CPU *cpu,
-    uint8_t core_id,
-    Memory *mem,
-    uint64_t virtual_address,
-    uint8_t *data,
-    uint8_t data_size)
+bool cpu_read(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
+              uint8_t *data, uint8_t data_size)
 {
     std::lock_guard<std::mutex> lk(cpu->bus_lock);
     Core *cores = cpu->cores;
     L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
     uint64_t physical_address;
-    if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(core->l1_dtlb, core->l2_dtlb, core->active_pml4, mem, virtual_address, &physical_address)) {
+    if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(
+            core->l1_dtlb, core->l2_dtlb, core->active_pml4, mem,
+            virtual_address, &physical_address)) {
         return false;
     }
 
@@ -403,9 +429,11 @@ bool cpu_read(
 
         // l2_cache_read_way sets this core's bit in core_valid_d first;
         // d_sharers masks it back out to get only the other cores' bits.
-        l2_cache_read_way(l2Set, core_id, l2_hit_way, line, &l2Set->core_valid_d[l2_hit_way]);
+        l2_cache_read_way(l2Set, core_id, l2_hit_way, line,
+                          &l2Set->core_valid_d[l2_hit_way]);
 
-        // Use L2 core_valid (both D and I) to drive coherence (L2 acts as directory)
+        // Use L2 core_valid (both D and I) to drive coherence (L2 acts as
+        // directory)
         uint8_t d_sharers = l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
         uint8_t i_sharers = l2Set->core_valid_i[l2_hit_way] & ~(1 << core_id);
         uint8_t other_sharers = d_sharers | i_sharers;
@@ -415,8 +443,8 @@ bool cpu_read(
             fill_state = MESIState::SHARED;
             // Snoop L1D peers only: M→S (fresh data), E→S (clean in L2)
             // L1I is always SHARED — no action needed
-            snoop_downgrade_peers(cores, d_sharers, l1_index,
-                                  l1_tag, line, l2Set, l2_hit_way);
+            snoop_downgrade_peers(cores, d_sharers, l1_index, l1_tag, line,
+                                  l2Set, l2_hit_way);
         } else {
             fill_state = MESIState::EXCLUSIVE;
         }
@@ -429,17 +457,20 @@ bool cpu_read(
 
     // L2 miss — fetch full line from main memory
     uint64_t line_base = to_line_base(physical_address);
-    if (line_base + LINE_SIZE > mem->size) std::abort(); // cpu_read: mem fetch out of bounds
+    if (line_base + LINE_SIZE > mem->size)
+        std::abort(); // cpu_read: mem fetch out of bounds
     uint8_t *mem_line = &mem->data[line_base];
 
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
     uint8_t l1_victim = evict_l1<false>(l1Set, l1_index, l2Sets, core_id);
 
-    l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, mem_line, MESIState::EXCLUSIVE, &l2Set->core_valid_d[l2_victim], &l2Set->core_valid_i[l2_victim]);
+    l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, mem_line,
+                  MESIState::EXCLUSIVE, &l2Set->core_valid_d[l2_victim],
+                  &l2Set->core_valid_i[l2_victim]);
     l1_cache_fill(l1Set, l1_tag, l1_victim, mem_line, MESIState::EXCLUSIVE);
 
-    // Hook fires after the demand fill so pf_fill_l2 never aliases the same L2 set
-    // as the demand line and evicts it before it's installed.
+    // Hook fires after the demand fill so pf_fill_l2 never aliases the same L2
+    // set as the demand line and evicts it before it's installed.
     pf_stream_on_miss(&core->prefetcher, cores, l2Sets, mem, line_base);
 
     core->pmc.mem_fetches++;
@@ -447,20 +478,17 @@ bool cpu_read(
     return true;
 }
 
-bool cpu_write(
-    CPU *cpu,
-    uint8_t core_id,
-    Memory *mem,
-    uint64_t virtual_address,
-    uint8_t *data,
-    uint8_t data_size)
+bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
+               uint8_t *data, uint8_t data_size)
 {
     std::lock_guard<std::mutex> lk(cpu->bus_lock);
     Core *cores = cpu->cores;
     L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
     uint64_t physical_address;
-    if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(core->l1_dtlb, core->l2_dtlb, core->active_pml4, mem, virtual_address, &physical_address)) {
+    if (!translate<L1_DTLB_SETS, L2_DTLB_SETS>(
+            core->l1_dtlb, core->l2_dtlb, core->active_pml4, mem,
+            virtual_address, &physical_address)) {
         return false;
     }
 
@@ -481,23 +509,27 @@ bool cpu_write(
         }
 
         if (l1Set->state[l1_hit_way] == MESIState::SHARED) {
-            // RFO (upgrade S→M): invalidate all other L1 copies via L2 directory.
-            // BusRdX is handled by L2, so update L2 PLRU (E→M silent upgrade does not).
-            uint8_t other_sharers = l2Set->core_valid_d[l2_way] & ~(1 << core_id);
+            // RFO (upgrade S→M): invalidate all other L1 copies via L2
+            // directory. BusRdX is handled by L2, so update L2 PLRU (E→M silent
+            // upgrade does not).
+            uint8_t other_sharers =
+                l2Set->core_valid_d[l2_way] & ~(1 << core_id);
             snoop_invalidate_peers(cores, other_sharers, l1_index, l1_tag,
                                    nullptr, l2Set, l2_way);
             plru_update<uint16_t, NUM_L2_WAYS>(&l2Set->plru_bits, l2_way);
         }
 
-        // All write paths: update L2 state and back-invalidate any peer L1I copies (SMC).
-        // S→M: L2 was SHARED, now MODIFIED. E→M: L2 was EXCLUSIVE, now MODIFIED.
-        // M→M: re-does this harmlessly.
-        snoop_invalidate_peers_i(cores, l2Set->core_valid_i[l2_way], l1_index, l1_tag);
+        // All write paths: update L2 state and back-invalidate any peer L1I
+        // copies (SMC). S→M: L2 was SHARED, now MODIFIED. E→M: L2 was
+        // EXCLUSIVE, now MODIFIED. M→M: re-does this harmlessly.
+        snoop_invalidate_peers_i(cores, l2Set->core_valid_i[l2_way], l1_index,
+                                 l1_tag);
         l2Set->core_valid_i[l2_way] = 0;
         l2Set->core_valid_d[l2_way] = static_cast<uint8_t>(1 << core_id);
         l2Set->state[l2_way] = MESIState::MODIFIED;
 
-        // l1_cache_write_way sets state → MODIFIED regardless of prior state (M/E/S all valid here)
+        // l1_cache_write_way sets state → MODIFIED regardless of prior state
+        // (M/E/S all valid here)
         core->pmc.l1d_hits++;
         l1_cache_write_way(l1Set, l1_hit_way, offset, data, data_size);
         return true;
@@ -511,10 +543,12 @@ bool cpu_write(
         // Fetch full line from L2 for write-allocate
         std::memcpy(line, l2Set->data[l2_hit_way], LINE_SIZE);
 
-        // RFO: snoop and invalidate all other L1D copies (BusRdX), capture MODIFIED data
-        uint8_t other_sharers = l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
-        snoop_invalidate_peers(cores, other_sharers, l1_index, l1_tag,
-                               line, l2Set, l2_hit_way);
+        // RFO: snoop and invalidate all other L1D copies (BusRdX), capture
+        // MODIFIED data
+        uint8_t other_sharers =
+            l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
+        snoop_invalidate_peers(cores, other_sharers, l1_index, l1_tag, line,
+                               l2Set, l2_hit_way);
 
         // Apply the write to the fetched line, then fill L1
         std::memcpy(line + offset, data, data_size);
@@ -523,8 +557,10 @@ bool cpu_write(
         l1_cache_fill(l1Set, l1_tag, victim, line, MESIState::MODIFIED);
 
         // L2: this core is sole owner, line is MODIFIED
-        // SMC: back-invalidate any peer L1I copies before zeroing the tracking bits
-        snoop_invalidate_peers_i(cores, l2Set->core_valid_i[l2_hit_way], l1_index, l1_tag);
+        // SMC: back-invalidate any peer L1I copies before zeroing the tracking
+        // bits
+        snoop_invalidate_peers_i(cores, l2Set->core_valid_i[l2_hit_way],
+                                 l1_index, l1_tag);
         l2Set->core_valid_i[l2_hit_way] = 0;
         l2Set->core_valid_d[l2_hit_way] = static_cast<uint8_t>(1 << core_id);
         l2Set->state[l2_hit_way] = MESIState::MODIFIED;
@@ -545,29 +581,28 @@ bool cpu_write(
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
     uint8_t l1_victim = evict_l1<false>(l1Set, l1_index, l2Sets, core_id);
 
-    l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, line, MESIState::MODIFIED, &l2Set->core_valid_d[l2_victim], &l2Set->core_valid_i[l2_victim]);
+    l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, line, MESIState::MODIFIED,
+                  &l2Set->core_valid_d[l2_victim],
+                  &l2Set->core_valid_i[l2_victim]);
     l1_cache_fill(l1Set, l1_tag, l1_victim, line, MESIState::MODIFIED);
 
-    // Write-allocate fetches a full line from memory — feed the streamer the same as a load miss.
+    // Write-allocate fetches a full line from memory — feed the streamer the
+    // same as a load miss.
     pf_stream_on_miss(&core->prefetcher, cores, l2Sets, mem, line_base);
     core->pmc.mem_fetches++;
     return true;
 }
 
-bool cpu_fetch(
-    CPU *cpu,
-    uint8_t core_id,
-    Memory *mem,
-    uint64_t virtual_address,
-    uint8_t *data,
-    uint8_t data_size)
+bool cpu_fetch(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
+               uint8_t *data, uint8_t data_size)
 {
     std::lock_guard<std::mutex> lk(cpu->bus_lock);
     Core *cores = cpu->cores;
     L2Set *l2Sets = cpu->l2Sets;
     Core *core = &cores[core_id];
     uint64_t physical_address;
-    if (!translate<ITLB_SETS>(core->itlb, core->active_pml4, mem, virtual_address, &physical_address)) {
+    if (!translate<ITLB_SETS>(core->itlb, core->active_pml4, mem,
+                              virtual_address, &physical_address)) {
         return false;
     }
 
@@ -591,23 +626,26 @@ bool cpu_fetch(
     uint8_t l2_hit_way;
 
     if (l2_find_way(l2Set, l2_tag, &l2_hit_way)) {
-        // Instruction pages must not be dirty — fetching a MODIFIED line means SMC without flush.
-        // Check before any side effects (evict_l1, l2_cache_read_way) so nothing is committed
-        // to a state that is about to be declared unreachable.
+        // Instruction pages must not be dirty — fetching a MODIFIED line means
+        // SMC without flush. Check before any side effects (evict_l1,
+        // l2_cache_read_way) so nothing is committed to a state that is about
+        // to be declared unreachable.
         if (l2Set->state[l2_hit_way] == MESIState::MODIFIED) {
             std::abort();
         }
 
-
         uint8_t victim = evict_l1<true>(l1Set, l1_index, l2Sets, core_id);
-        l2_cache_read_way(l2Set, core_id, l2_hit_way, line, &l2Set->core_valid_i[l2_hit_way]);
+        l2_cache_read_way(l2Set, core_id, l2_hit_way, line,
+                          &l2Set->core_valid_i[l2_hit_way]);
         uint8_t d_sharers = l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
         uint8_t i_sharers = l2Set->core_valid_i[l2_hit_way] & ~(1 << core_id);
         if (d_sharers | i_sharers) {
-            snoop_downgrade_peers(cores, d_sharers, l1_index, l1_tag, line, l2Set, l2_hit_way);
+            snoop_downgrade_peers(cores, d_sharers, l1_index, l1_tag, line,
+                                  l2Set, l2_hit_way);
         }
 
-        // L1I always fills as SHARED (SI protocol — instruction pages are read-only)
+        // L1I always fills as SHARED (SI protocol — instruction pages are
+        // read-only)
         l1_cache_fill(l1Set, l1_tag, victim, line, MESIState::SHARED);
         core->pmc.l2_hits++;
         std::memcpy(data, line + offset, data_size);
@@ -616,14 +654,17 @@ bool cpu_fetch(
 
     // L2 miss — fetch from main memory
     uint64_t line_base = to_line_base(physical_address);
-    if (line_base + LINE_SIZE > mem->size) std::abort(); // cpu_fetch: mem fetch out of bounds
+    if (line_base + LINE_SIZE > mem->size)
+        std::abort(); // cpu_fetch: mem fetch out of bounds
     uint8_t *mem_line = &mem->data[line_base];
 
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
     uint8_t l1_victim = evict_l1<true>(l1Set, l1_index, l2Sets, core_id);
 
     // Fresh from memory — no other sharers exist, so L2 starts EXCLUSIVE.
-    l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, mem_line, MESIState::EXCLUSIVE, &l2Set->core_valid_i[l2_victim], &l2Set->core_valid_d[l2_victim]);
+    l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, mem_line,
+                  MESIState::EXCLUSIVE, &l2Set->core_valid_i[l2_victim],
+                  &l2Set->core_valid_d[l2_victim]);
     l1_cache_fill(l1Set, l1_tag, l1_victim, mem_line, MESIState::SHARED);
 
     pf_nextline_on_miss(cores, l2Sets, mem, line_base);

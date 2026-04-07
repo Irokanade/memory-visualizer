@@ -1,10 +1,9 @@
 #ifndef CORE_H
 #define CORE_H
 
-#include "types.h"
 #include "memory.h"
+#include "types.h"
 #include <cstdint>
-
 
 struct PerfCounters {
     uint64_t l1d_hits;
@@ -48,33 +47,37 @@ struct TLBSet {
 
 // Intel Core 2: 64-set 8-way L1D and L1I, 4-way TLBs
 // L1 DTLB: 4 sets x 4 ways = 16 entries  (load μTLB, 2-cycle miss penalty)
-// L2 DTLB: 64 sets x 4 ways = 256 entries (main DTLB for 4KB pages, 8-cycle miss penalty)
-// ITLB:    32 sets x 4 ways = 128 entries
-// No unified STLB on Conroe/Merom (added in Sandy Bridge)
-constexpr uint8_t L1_SETS      = 64;
+// L2 DTLB: 64 sets x 4 ways = 256 entries (main DTLB for 4KB pages, 8-cycle
+// miss penalty) ITLB:    32 sets x 4 ways = 128 entries No unified STLB on
+// Conroe/Merom (added in Sandy Bridge)
+constexpr uint8_t L1_SETS = 64;
 constexpr uint8_t L1_DTLB_SETS = 4;
 constexpr uint8_t L2_DTLB_SETS = 64;
-constexpr uint8_t ITLB_SETS    = 32;
+constexpr uint8_t ITLB_SETS = 32;
 struct Core {
-    L1Set        l1d[L1_SETS];
-    L1Set        l1i[L1_SETS];
-    TLBSet       l1_dtlb[L1_DTLB_SETS];
-    TLBSet       l2_dtlb[L2_DTLB_SETS];
-    TLBSet       itlb[ITLB_SETS];
-    PageTable   *active_pml4;
-    Prefetcher   prefetcher;
+    L1Set l1d[L1_SETS];
+    L1Set l1i[L1_SETS];
+    TLBSet l1_dtlb[L1_DTLB_SETS];
+    TLBSet l2_dtlb[L2_DTLB_SETS];
+    TLBSet itlb[ITLB_SETS];
+    PageTable *active_pml4;
+    Prefetcher prefetcher;
     PerfCounters pmc;
-    uint8_t      core_id;
+    uint8_t core_id;
 };
 
-bool tlb_lookup(TLBSet *set, uint64_t virtual_page_num, uint64_t *physical_frame);
+bool tlb_lookup(TLBSet *set, uint64_t virtual_page_num,
+                uint64_t *physical_frame);
 void tlb_fill(TLBSet *set, uint64_t virtual_page_num, uint64_t physical_frame);
 
 // Sets *way to the matching non-INVALID way index. Returns false on miss.
 bool find_l1_way(const L1Set *set, uint64_t tag, uint8_t *way);
-void l1_cache_read_way(L1Set *l1Set, uint8_t way, uint8_t offset, uint8_t *data, uint8_t data_size);
-void l1_cache_write_way(L1Set *l1Set, uint8_t way, uint8_t offset, uint8_t *data, uint8_t data_size);
-void l1_cache_fill(L1Set *l1Set, uint64_t tag, uint8_t way, uint8_t *line, MESIState state);
+void l1_cache_read_way(L1Set *l1Set, uint8_t way, uint8_t offset, uint8_t *data,
+                       uint8_t data_size);
+void l1_cache_write_way(L1Set *l1Set, uint8_t way, uint8_t offset,
+                        uint8_t *data, uint8_t data_size);
+void l1_cache_fill(L1Set *l1Set, uint64_t tag, uint8_t way, uint8_t *line,
+                   MESIState state);
 
 void pf_lru_update(uint8_t *pf_lru_age, uint8_t index);
 uint8_t pf_lru_evict(uint8_t *pf_lru_age);
