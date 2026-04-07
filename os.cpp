@@ -10,8 +10,9 @@ uint64_t alloc_frame(FrameAllocator *fa, Memory *mem)
         pa = fa->free_list.back();
         fa->free_list.pop_back();
     } else {
-        if (fa->watermark + PAGE_SIZE > fa->limit)
+        if (fa->watermark + PAGE_SIZE > fa->limit) {
             return UINT64_MAX; // OOM
+        }
         pa = fa->watermark;
         fa->watermark += PAGE_SIZE;
     }
@@ -35,8 +36,9 @@ bool map_page(Process *proc, FrameAllocator *fa, Memory *mem, uint64_t va,
 
         if (!entry->present) {
             uint64_t new_pa = alloc_frame(fa, mem);
-            if (new_pa == UINT64_MAX)
+            if (new_pa == UINT64_MAX) {
                 return false;
+            }
             entry->physical_address = new_pa;
             entry->present = true;
             entry->writable = true;
@@ -56,8 +58,9 @@ uint64_t alloc_and_map(Process *proc, FrameAllocator *fa, Memory *mem,
                        uint64_t va, bool writable, bool user)
 {
     uint64_t pa = alloc_frame(fa, mem);
-    if (pa == UINT64_MAX)
+    if (pa == UINT64_MAX) {
         return UINT64_MAX;
+    }
     if (!map_page(proc, fa, mem, va, pa, writable, user)) {
         free_frame(fa, pa);
         return UINT64_MAX;
@@ -76,15 +79,21 @@ Process *process_create(uint32_t pid)
 
 void tlb_flush(Core *core)
 {
-    for (uint8_t s = 0; s < L1_DTLB_SETS; s++)
-        for (uint8_t w = 0; w < NUM_TLB_WAYS; w++)
+    for (uint8_t s = 0; s < L1_DTLB_SETS; s++) {
+        for (uint8_t w = 0; w < NUM_TLB_WAYS; w++) {
             core->l1_dtlb[s].valid[w] = false;
-    for (uint8_t s = 0; s < L2_DTLB_SETS; s++)
-        for (uint8_t w = 0; w < NUM_TLB_WAYS; w++)
+        }
+    }
+    for (uint8_t s = 0; s < L2_DTLB_SETS; s++) {
+        for (uint8_t w = 0; w < NUM_TLB_WAYS; w++) {
             core->l2_dtlb[s].valid[w] = false;
-    for (uint8_t s = 0; s < ITLB_SETS; s++)
-        for (uint8_t w = 0; w < NUM_TLB_WAYS; w++)
+        }
+    }
+    for (uint8_t s = 0; s < ITLB_SETS; s++) {
+        for (uint8_t w = 0; w < NUM_TLB_WAYS; w++) {
             core->itlb[s].valid[w] = false;
+        }
+    }
 }
 
 void process_switch(CPU *cpu, Process *proc)
