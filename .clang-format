@@ -4,3 +4,4 @@ AlignConsecutiveDeclarations: None
 AlignConsecutiveAssignments: None
 
 BreakBeforeBraces: Linux
+InsertBraces: true
