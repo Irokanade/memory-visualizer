@@ -361,8 +361,9 @@ static void pf_stream_on_miss(Prefetcher *pf, Core *cores, L2Set *l2Sets,
             int64_t gap = (static_cast<int64_t>(stream->prefetch_head) -
                            static_cast<int64_t>(miss_line)) *
                           static_cast<int64_t>(stride);
-            if (gap >= static_cast<int64_t>(PREFETCH_DISTANCE) * LINE_SIZE)
+            if (gap >= static_cast<int64_t>(PREFETCH_DISTANCE) * LINE_SIZE) {
                 break;
+            }
             uint64_t next =
                 stream->prefetch_head +
                 static_cast<uint64_t>(static_cast<int64_t>(stride) * LINE_SIZE);
@@ -427,13 +428,9 @@ bool cpu_read(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
     if (l2_find_way(l2Set, l2_tag, &l2_hit_way)) {
         uint8_t victim = evict_l1<false>(l1Set, l1_index, l2Sets, core_id);
 
-        // l2_cache_read_way sets this core's bit in core_valid_d first;
-        // d_sharers masks it back out to get only the other cores' bits.
         l2_cache_read_way(l2Set, core_id, l2_hit_way, line,
                           &l2Set->core_valid_d[l2_hit_way]);
 
-        // Use L2 core_valid (both D and I) to drive coherence (L2 acts as
-        // directory)
         uint8_t d_sharers = l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
         uint8_t i_sharers = l2Set->core_valid_i[l2_hit_way] & ~(1 << core_id);
         uint8_t other_sharers = d_sharers | i_sharers;
@@ -441,8 +438,6 @@ bool cpu_read(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
 
         if (other_sharers) {
             fill_state = MESIState::SHARED;
-            // Snoop L1D peers only: M→S (fresh data), E→S (clean in L2)
-            // L1I is always SHARED — no action needed
             snoop_downgrade_peers(cores, d_sharers, l1_index, l1_tag, line,
                                   l2Set, l2_hit_way);
         } else {
@@ -457,8 +452,9 @@ bool cpu_read(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
 
     // L2 miss — fetch full line from main memory
     uint64_t line_base = to_line_base(physical_address);
-    if (line_base + LINE_SIZE > mem->size)
-        std::abort(); // cpu_read: mem fetch out of bounds
+    if (line_base + LINE_SIZE > mem->size) {
+        std::abort();
+    }
     uint8_t *mem_line = &mem->data[line_base];
 
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
@@ -468,9 +464,6 @@ bool cpu_read(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
                   MESIState::EXCLUSIVE, &l2Set->core_valid_d[l2_victim],
                   &l2Set->core_valid_i[l2_victim]);
     l1_cache_fill(l1Set, l1_tag, l1_victim, mem_line, MESIState::EXCLUSIVE);
-
-    // Hook fires after the demand fill so pf_fill_l2 never aliases the same L2
-    // set as the demand line and evicts it before it's installed.
     pf_stream_on_miss(&core->prefetcher, cores, l2Sets, mem, line_base);
 
     core->pmc.mem_fetches++;
@@ -509,9 +502,6 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
         }
 
         if (l1Set->state[l1_hit_way] == MESIState::SHARED) {
-            // RFO (upgrade S→M): invalidate all other L1 copies via L2
-            // directory. BusRdX is handled by L2, so update L2 PLRU (E→M silent
-            // upgrade does not).
             uint8_t other_sharers =
                 l2Set->core_valid_d[l2_way] & ~(1 << core_id);
             snoop_invalidate_peers(cores, other_sharers, l1_index, l1_tag,
@@ -519,17 +509,12 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
             plru_update<uint16_t, NUM_L2_WAYS>(&l2Set->plru_bits, l2_way);
         }
 
-        // All write paths: update L2 state and back-invalidate any peer L1I
-        // copies (SMC). S→M: L2 was SHARED, now MODIFIED. E→M: L2 was
-        // EXCLUSIVE, now MODIFIED. M→M: re-does this harmlessly.
         snoop_invalidate_peers_i(cores, l2Set->core_valid_i[l2_way], l1_index,
                                  l1_tag);
         l2Set->core_valid_i[l2_way] = 0;
         l2Set->core_valid_d[l2_way] = static_cast<uint8_t>(1 << core_id);
         l2Set->state[l2_way] = MESIState::MODIFIED;
 
-        // l1_cache_write_way sets state → MODIFIED regardless of prior state
-        // (M/E/S all valid here)
         core->pmc.l1d_hits++;
         l1_cache_write_way(l1Set, l1_hit_way, offset, data, data_size);
         return true;
@@ -540,25 +525,17 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
     uint8_t l2_hit_way;
 
     if (l2_find_way(l2Set, l2_tag, &l2_hit_way)) {
-        // Fetch full line from L2 for write-allocate
         std::memcpy(line, l2Set->data[l2_hit_way], LINE_SIZE);
 
-        // RFO: snoop and invalidate all other L1D copies (BusRdX), capture
-        // MODIFIED data
         uint8_t other_sharers =
             l2Set->core_valid_d[l2_hit_way] & ~(1 << core_id);
         snoop_invalidate_peers(cores, other_sharers, l1_index, l1_tag, line,
                                l2Set, l2_hit_way);
 
-        // Apply the write to the fetched line, then fill L1
         std::memcpy(line + offset, data, data_size);
 
         uint8_t victim = evict_l1<false>(l1Set, l1_index, l2Sets, core_id);
         l1_cache_fill(l1Set, l1_tag, victim, line, MESIState::MODIFIED);
-
-        // L2: this core is sole owner, line is MODIFIED
-        // SMC: back-invalidate any peer L1I copies before zeroing the tracking
-        // bits
         snoop_invalidate_peers_i(cores, l2Set->core_valid_i[l2_hit_way],
                                  l1_index, l1_tag);
         l2Set->core_valid_i[l2_hit_way] = 0;
@@ -576,7 +553,7 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
         std::abort();
     }
     std::memcpy(line, &mem->data[line_base], LINE_SIZE);
-    std::memcpy(line + offset, data, data_size); // apply write
+    std::memcpy(line + offset, data, data_size);
 
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
     uint8_t l1_victim = evict_l1<false>(l1Set, l1_index, l2Sets, core_id);
@@ -585,9 +562,6 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
                   &l2Set->core_valid_d[l2_victim],
                   &l2Set->core_valid_i[l2_victim]);
     l1_cache_fill(l1Set, l1_tag, l1_victim, line, MESIState::MODIFIED);
-
-    // Write-allocate fetches a full line from memory — feed the streamer the
-    // same as a load miss.
     pf_stream_on_miss(&core->prefetcher, cores, l2Sets, mem, line_base);
     core->pmc.mem_fetches++;
     return true;
@@ -654,8 +628,9 @@ bool cpu_fetch(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
 
     // L2 miss — fetch from main memory
     uint64_t line_base = to_line_base(physical_address);
-    if (line_base + LINE_SIZE > mem->size)
+    if (line_base + LINE_SIZE > mem->size) {
         std::abort(); // cpu_fetch: mem fetch out of bounds
+    }
     uint8_t *mem_line = &mem->data[line_base];
 
     uint8_t l2_victim = evict_l2(cores, l2Set, l2_index, mem);
