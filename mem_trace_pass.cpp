@@ -54,6 +54,9 @@ struct MemTracePass : PassInfoMixin<MemTracePass> {
             B.CreateCall(fn, {addr, sz});
         }
 
+        if (to_instrument.empty()) {
+            return PreservedAnalyses::all();
+        }
         return PreservedAnalyses::none();
     }
 };

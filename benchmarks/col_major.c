@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define N 256
+#define N 512
 
 int32_t matrix[N][N];
 

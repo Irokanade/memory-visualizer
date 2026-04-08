@@ -1,5 +1,6 @@
 #include "cpu.h"
 #include "core.h"
+#include "cpu_callback.h"
 #include "memory.h"
 #include "plru.h"
 #include "types.h"
@@ -40,6 +41,12 @@ static void snoop_downgrade_peers(Core *cores, uint8_t sharers,
                 std::memcpy(line_inout, peer->data[w], LINE_SIZE);
                 std::memcpy(l2Set->data[l2_hit_way], peer->data[w], LINE_SIZE);
             }
+            if (g_cpu_callback) {
+                g_cpu_callback(CACHE_SNOOP_DOWNGRADE, c, 1, l1_index, w, 0,
+                               static_cast<uint8_t>(peer->state[w]),
+                               static_cast<uint8_t>(MESIState::SHARED),
+                               peer->data[w]);
+            }
             peer->state[w] = MESIState::SHARED;
         }
     }
@@ -58,6 +65,12 @@ static void snoop_invalidate_peers_i(Core *cores, uint8_t i_sharers,
         L1Set *peer = &cores[c].l1i[l1_index];
         uint8_t w;
         if (find_l1_way(peer, l1_tag, &w)) {
+            if (g_cpu_callback) {
+                g_cpu_callback(CACHE_SNOOP_INVALIDATE, c, 1, l1_index, w, 0,
+                               static_cast<uint8_t>(peer->state[w]),
+                               static_cast<uint8_t>(MESIState::INVALID),
+                               nullptr);
+            }
             peer->state[w] = MESIState::INVALID;
         }
     }
@@ -85,6 +98,12 @@ static void snoop_invalidate_peers(Core *cores, uint8_t sharers,
                 // L2 here would be redundant and diverge from the lazy
                 // write-back model.
                 std::memcpy(line_out, peer->data[w], LINE_SIZE);
+            }
+            if (g_cpu_callback) {
+                g_cpu_callback(CACHE_SNOOP_INVALIDATE, c, 1, l1_index, w, 0,
+                               static_cast<uint8_t>(peer->state[w]),
+                               static_cast<uint8_t>(MESIState::INVALID),
+                               peer->data[w]);
             }
             peer->state[w] = MESIState::INVALID;
         }
@@ -189,6 +208,12 @@ static uint8_t evict_l1(L1Set *l1Set, uint16_t l1_index, L2Set *l2Sets,
         }
     }
 
+    if (g_cpu_callback) {
+        g_cpu_callback(CACHE_L1D_EVICT, core_id, 1, l1_index, victim,
+                       victim_addr, static_cast<uint8_t>(l1Set->state[victim]),
+                       static_cast<uint8_t>(MESIState::INVALID),
+                       l1Set->data[victim]);
+    }
     l1Set->state[victim] = MESIState::INVALID;
     return victim;
 }
@@ -224,6 +249,13 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index,
                                 LINE_SIZE);
                     l2Set->state[l2_victim] = MESIState::MODIFIED;
                 }
+                if (g_cpu_callback) {
+                    g_cpu_callback(CACHE_SNOOP_INVALIDATE, c, 1, victim_l1_idx,
+                                   w, l2_victim_addr,
+                                   static_cast<uint8_t>(peer_l1d->state[w]),
+                                   static_cast<uint8_t>(MESIState::INVALID),
+                                   peer_l1d->data[w]);
+                }
                 peer_l1d->state[w] = MESIState::INVALID;
             } else {
                 // Stale core_valid_d — L1 line is gone but bit was never
@@ -238,6 +270,13 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index,
             L1Set *peer_l1i = &cores[c].l1i[victim_l1_idx];
             uint8_t w;
             if (find_l1_way(peer_l1i, victim_l1_tag, &w)) {
+                if (g_cpu_callback) {
+                    g_cpu_callback(CACHE_SNOOP_INVALIDATE, c, 1, victim_l1_idx,
+                                   w, l2_victim_addr,
+                                   static_cast<uint8_t>(peer_l1i->state[w]),
+                                   static_cast<uint8_t>(MESIState::INVALID),
+                                   nullptr);
+                }
                 peer_l1i->state[w] = MESIState::INVALID;
             }
         }
@@ -249,6 +288,13 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index,
         }
         std::memcpy(&mem->data[l2_victim_addr], l2Set->data[l2_victim],
                     LINE_SIZE);
+    }
+
+    if (g_cpu_callback) {
+        g_cpu_callback(
+            CACHE_L2_EVICT, 0, 2, l2_index, l2_victim, l2_victim_addr,
+            static_cast<uint8_t>(l2Set->state[l2_victim]),
+            static_cast<uint8_t>(MESIState::INVALID), l2Set->data[l2_victim]);
     }
 
     // Clear tracking bitmasks so l2_cache_fill's precondition assert passes.
@@ -287,6 +333,12 @@ static bool pf_fill_l2(Core *cores, L2Set *l2Sets, Memory *mem,
     // core_valid field.
     l2_cache_fill(l2Set, l2_tag, l2_victim, &mem->data[next_line],
                   MESIState::EXCLUSIVE);
+    if (g_cpu_callback) {
+        g_cpu_callback(CACHE_PREFETCH_L2, 0, 2, l2_index, l2_victim, next_line,
+                       static_cast<uint8_t>(MESIState::INVALID),
+                       static_cast<uint8_t>(MESIState::EXCLUSIVE),
+                       &mem->data[next_line]);
+    }
     return true;
 }
 
@@ -417,6 +469,13 @@ bool cpu_read(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
     // L1 hit — handles M/E/S
     uint8_t l1_hit_way;
     if (find_l1_way(l1Set, l1_tag, &l1_hit_way)) {
+        if (g_cpu_callback) {
+            g_cpu_callback(CACHE_L1D_HIT, core_id, 1, l1_index, l1_hit_way,
+                           physical_address,
+                           static_cast<uint8_t>(l1Set->state[l1_hit_way]),
+                           static_cast<uint8_t>(l1Set->state[l1_hit_way]),
+                           l1Set->data[l1_hit_way]);
+        }
         core->pmc.l1d_hits++;
         l1_cache_read_way(l1Set, l1_hit_way, offset, data, data_size);
         return true;
@@ -426,6 +485,13 @@ bool cpu_read(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
     uint8_t l2_hit_way;
 
     if (l2_find_way(l2Set, l2_tag, &l2_hit_way)) {
+        if (g_cpu_callback) {
+            g_cpu_callback(CACHE_L2_HIT, core_id, 2, l2_index, l2_hit_way,
+                           physical_address,
+                           static_cast<uint8_t>(l2Set->state[l2_hit_way]),
+                           static_cast<uint8_t>(l2Set->state[l2_hit_way]),
+                           nullptr);
+        }
         uint8_t victim = evict_l1<false>(l1Set, l1_index, l2Sets, core_id);
 
         l2_cache_read_way(l2Set, core_id, l2_hit_way, line,
@@ -446,6 +512,12 @@ bool cpu_read(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
 
         core->pmc.l2_hits++;
         l1_cache_fill(l1Set, l1_tag, victim, line, fill_state);
+        if (g_cpu_callback) {
+            g_cpu_callback(CACHE_L1D_FILL, core_id, 1, l1_index, victim,
+                           physical_address,
+                           static_cast<uint8_t>(MESIState::INVALID),
+                           static_cast<uint8_t>(fill_state), line);
+        }
         std::memcpy(data, line + offset, data_size);
         return true;
     }
@@ -463,7 +535,20 @@ bool cpu_read(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
     l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, mem_line,
                   MESIState::EXCLUSIVE, &l2Set->core_valid_d[l2_victim],
                   &l2Set->core_valid_i[l2_victim]);
+    if (g_cpu_callback) {
+        g_cpu_callback(CACHE_L2_FILL, core_id, 2, l2_index, l2_victim,
+                       line_base, static_cast<uint8_t>(MESIState::INVALID),
+                       static_cast<uint8_t>(MESIState::EXCLUSIVE), mem_line);
+    }
     l1_cache_fill(l1Set, l1_tag, l1_victim, mem_line, MESIState::EXCLUSIVE);
+    if (g_cpu_callback) {
+        g_cpu_callback(CACHE_L1D_FILL, core_id, 1, l1_index, l1_victim,
+                       line_base, static_cast<uint8_t>(MESIState::INVALID),
+                       static_cast<uint8_t>(MESIState::EXCLUSIVE), mem_line);
+        g_cpu_callback(CACHE_MEM_FETCH, core_id, 3, 0, 0, line_base, 0, 0,
+                       mem_line);
+    }
+
     pf_stream_on_miss(&core->prefetcher, cores, l2Sets, mem, line_base);
 
     core->pmc.mem_fetches++;
@@ -501,6 +586,7 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
             std::abort();
         }
 
+        MESIState old_l1 = l1Set->state[l1_hit_way];
         if (l1Set->state[l1_hit_way] == MESIState::SHARED) {
             uint8_t other_sharers =
                 l2Set->core_valid_d[l2_way] & ~(1 << core_id);
@@ -517,6 +603,12 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
 
         core->pmc.l1d_hits++;
         l1_cache_write_way(l1Set, l1_hit_way, offset, data, data_size);
+        if (g_cpu_callback) {
+            g_cpu_callback(CACHE_L1D_HIT, core_id, 1, l1_index, l1_hit_way,
+                           physical_address, static_cast<uint8_t>(old_l1),
+                           static_cast<uint8_t>(MESIState::MODIFIED),
+                           l1Set->data[l1_hit_way]);
+        }
         return true;
     }
 
@@ -525,6 +617,13 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
     uint8_t l2_hit_way;
 
     if (l2_find_way(l2Set, l2_tag, &l2_hit_way)) {
+        if (g_cpu_callback) {
+            g_cpu_callback(CACHE_L2_HIT, core_id, 2, l2_index, l2_hit_way,
+                           physical_address,
+                           static_cast<uint8_t>(l2Set->state[l2_hit_way]),
+                           static_cast<uint8_t>(l2Set->state[l2_hit_way]),
+                           nullptr);
+        }
         std::memcpy(line, l2Set->data[l2_hit_way], LINE_SIZE);
 
         uint8_t other_sharers =
@@ -536,6 +635,13 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
 
         uint8_t victim = evict_l1<false>(l1Set, l1_index, l2Sets, core_id);
         l1_cache_fill(l1Set, l1_tag, victim, line, MESIState::MODIFIED);
+        if (g_cpu_callback) {
+            g_cpu_callback(CACHE_L1D_FILL, core_id, 1, l1_index, victim,
+                           physical_address,
+                           static_cast<uint8_t>(MESIState::INVALID),
+                           static_cast<uint8_t>(MESIState::MODIFIED), line);
+        }
+
         snoop_invalidate_peers_i(cores, l2Set->core_valid_i[l2_hit_way],
                                  l1_index, l1_tag);
         l2Set->core_valid_i[l2_hit_way] = 0;
@@ -561,7 +667,20 @@ bool cpu_write(CPU *cpu, uint8_t core_id, Memory *mem, uint64_t virtual_address,
     l2_cache_fill(l2Set, core_id, l2_tag, l2_victim, line, MESIState::MODIFIED,
                   &l2Set->core_valid_d[l2_victim],
                   &l2Set->core_valid_i[l2_victim]);
+    if (g_cpu_callback) {
+        g_cpu_callback(CACHE_L2_FILL, core_id, 2, l2_index, l2_victim,
+                       line_base, static_cast<uint8_t>(MESIState::INVALID),
+                       static_cast<uint8_t>(MESIState::MODIFIED), line);
+    }
     l1_cache_fill(l1Set, l1_tag, l1_victim, line, MESIState::MODIFIED);
+    if (g_cpu_callback) {
+        g_cpu_callback(CACHE_L1D_FILL, core_id, 1, l1_index, l1_victim,
+                       line_base, static_cast<uint8_t>(MESIState::INVALID),
+                       static_cast<uint8_t>(MESIState::MODIFIED), line);
+        g_cpu_callback(CACHE_MEM_FETCH, core_id, 3, 0, 0, line_base, 0, 0,
+                       line);
+    }
+
     pf_stream_on_miss(&core->prefetcher, cores, l2Sets, mem, line_base);
     core->pmc.mem_fetches++;
     return true;

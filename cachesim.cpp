@@ -1,6 +1,8 @@
 #include "cachesim.h"
 #include "cpu.h"
+#include "event.h"
 #include "os.h"
+#include "cpu_callback.h"
 #include "types.h"
 
 #include <cstdio>
@@ -14,6 +16,7 @@ static Memory mem;
 static FrameAllocator fa;
 static Process *proc;
 static CPU cpu;
+static const char *trace_path = nullptr;
 
 __attribute__((constructor)) static void cachesim_init(void)
 {
@@ -23,6 +26,12 @@ __attribute__((constructor)) static void cachesim_init(void)
     fa.limit = PHYS_SIZE;
     proc = process_create(1);
     process_switch(&cpu, proc);
+
+    trace_path = getenv("CACHESIM_TRACE");
+    if (trace_path) {
+        g_event_queue = new EventQueue();
+        g_cpu_callback = event_callback;
+    }
 }
 
 extern "C" void cachesim_map_region(uint64_t start, uint64_t size)
@@ -59,6 +68,7 @@ static inline bool is_cacheline_split(uint64_t addr, uint32_t size)
 
 extern "C" void cachesim_read(uint64_t addr, uint32_t size)
 {
+    event_begin_step();
     ensure_page(addr);
     uint8_t buf[LINE_SIZE];
     __builtin_memcpy(buf, reinterpret_cast<void *>(addr), size);
@@ -76,6 +86,7 @@ extern "C" void cachesim_read(uint64_t addr, uint32_t size)
 
 extern "C" void cachesim_write(uint64_t addr, uint32_t size)
 {
+    event_begin_step();
     ensure_page(addr);
     uint8_t buf[LINE_SIZE];
     __builtin_memcpy(buf, reinterpret_cast<void *>(addr), size);
@@ -124,4 +135,14 @@ __attribute__((destructor)) extern "C" void cachesim_finish(void)
     }
 
     printf("\ntotal data accesses: %llu\n", (unsigned long long)total_d);
+
+    if (g_event_queue && trace_path) {
+        if (write_trace(trace_path, g_event_queue)) {
+            printf("trace written to %s (%llu events)\n", trace_path,
+                   (unsigned long long)g_event_queue->count);
+        }
+        delete g_event_queue;
+        g_event_queue = nullptr;
+        g_cpu_callback = nullptr;
+    }
 }
