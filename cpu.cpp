@@ -66,8 +66,8 @@ static void snoop_invalidate_peers_i(Core *cores, uint8_t i_sharers,
         uint8_t w;
         if (find_l1_way(peer, l1_tag, &w)) {
             if (g_cpu_callback) {
-                g_cpu_callback(CACHE_SNOOP_INVALIDATE, c, 1, l1_index, w, 0,
-                               static_cast<uint8_t>(peer->state[w]),
+                g_cpu_callback(CACHE_L1I_SNOOP_INVALIDATE, c, 1, l1_index, w,
+                               0, static_cast<uint8_t>(peer->state[w]),
                                static_cast<uint8_t>(MESIState::INVALID),
                                nullptr);
             }
@@ -271,13 +271,15 @@ static uint8_t evict_l2(Core *cores, L2Set *l2Set, uint16_t l2_index,
             uint8_t w;
             if (find_l1_way(peer_l1i, victim_l1_tag, &w)) {
                 if (g_cpu_callback) {
-                    g_cpu_callback(CACHE_SNOOP_INVALIDATE, c, 1, victim_l1_idx,
-                                   w, l2_victim_addr,
+                    g_cpu_callback(CACHE_L1I_SNOOP_INVALIDATE, c, 1,
+                                   victim_l1_idx, w, l2_victim_addr,
                                    static_cast<uint8_t>(peer_l1i->state[w]),
                                    static_cast<uint8_t>(MESIState::INVALID),
                                    nullptr);
                 }
                 peer_l1i->state[w] = MESIState::INVALID;
+            } else {
+                std::abort();
             }
         }
     }
